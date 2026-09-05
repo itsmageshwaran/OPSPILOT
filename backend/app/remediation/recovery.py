@@ -218,14 +218,17 @@ class RecoveryVerifier:
         except Exception as e:
             logger.debug(f"Checkout probe exception: {e}")
 
+        probe_lat: Optional[float] = None
         if probe_res is not None:
+            if "latency_ms" in probe_res and probe_res["latency_ms"] is not None:
+                probe_lat = float(probe_res["latency_ms"])
             if probe_res.get("success") is True:
                 available_signals_count += 1
                 positive_signals_count += 1
                 checkout_successful = True
                 order_id = probe_res.get("order_id", "simulated")
-                lat = probe_res.get("latency_ms", 0.0)
-                reasons.append(f"Active synthetic checkout probe succeeded (Order ID: {order_id}, latency: {lat:.1f}ms).")
+                lat_str = f"{probe_lat:.1f}ms" if probe_lat is not None else "nominal"
+                reasons.append(f"Active synthetic checkout probe succeeded (Order ID: {order_id}, latency: {lat_str}).")
             elif probe_res.get("status_code", 0) > 0 and probe_res.get("status_code") != 200:
                 available_signals_count += 1
                 failure_evidence_found = True
@@ -259,6 +262,7 @@ class RecoveryVerifier:
             error_rate=error_rate_val,
             latency_ms=latency_val,
             checkout_successful=checkout_successful,
+            probe_latency_ms=probe_lat,
             signals_evaluated=signals_evaluated,
             reasons=reasons
         )

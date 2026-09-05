@@ -59,6 +59,7 @@ class RecoveryEvidence(BaseModel):
     error_rate: Optional[float] = None
     latency_ms: Optional[float] = None
     checkout_successful: Optional[bool] = None
+    probe_latency_ms: Optional[float] = None
     signals_evaluated: List[str] = Field(default_factory=list)
     reasons: List[str] = Field(default_factory=list)
 

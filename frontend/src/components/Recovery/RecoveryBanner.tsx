@@ -101,8 +101,14 @@ export const RecoveryBanner: React.FC = () => {
                 ) : (
                   <span className="text-slate-400">Probe Ready</span>
                 )}
-                {currentRecovery?.latency_ms !== undefined && currentRecovery?.latency_ms !== null && (
-                  <span className="text-accent-sky font-mono">({currentRecovery.latency_ms.toFixed(1)}ms)</span>
+                {currentRecovery?.checkout_successful && (
+                  <span className="text-accent-sky font-mono">
+                    ({currentRecovery.probe_latency_ms !== undefined && currentRecovery.probe_latency_ms !== null
+                      ? currentRecovery.probe_latency_ms < 1.0
+                        ? "<1 ms"
+                        : `${currentRecovery.probe_latency_ms.toFixed(1)} ms`
+                      : "verified"})
+                  </span>
                 )}
               </div>
             </div>
@@ -131,7 +137,9 @@ export const RecoveryBanner: React.FC = () => {
             <span className="text-[9px] text-slate-400 uppercase block">Telemetry Latency</span>
             <span className="font-bold text-accent-sky mt-0.5 block text-xs">
               {currentRecovery?.latency_ms !== undefined && currentRecovery?.latency_ms !== null
-                ? `${currentRecovery.latency_ms.toFixed(1)} ms`
+                ? currentRecovery.latency_ms < 1.0
+                  ? "<1 ms (Nominal)"
+                  : `${currentRecovery.latency_ms.toFixed(1)} ms`
                 : "Nominal"}
             </span>
           </div>

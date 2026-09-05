@@ -134,6 +134,7 @@ export interface RecoveryEvidence {
   error_rate?: number | null;
   latency_ms?: number | null;
   checkout_successful?: boolean | null;
+  probe_latency_ms?: number | null;
   signals_evaluated: string[];
   reasons: string[];
 }
