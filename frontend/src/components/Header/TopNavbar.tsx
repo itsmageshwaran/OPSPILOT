@@ -7,6 +7,7 @@ import {
   BarChart3,
   Radio,
   ShieldCheck,
+  RotateCcw,
 } from "lucide-react";
 
 interface TopNavbarProps {
@@ -20,6 +21,7 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenBenchmark }) => {
     isPolling,
     triggerSync,
     triggerCorrelation,
+    triggerReset,
     togglePolling,
   } = useOpsPilot();
 
@@ -121,6 +123,17 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenBenchmark }) => {
           >
             <BarChart3 className="w-3 h-3 text-accent-purple" />
             <span className="hidden sm:inline">Benchmark</span>
+          </button>
+
+          {/* Reset Demo State Button */}
+          <button
+            onClick={() => triggerReset()}
+            disabled={isActionLoading}
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-surface-elevated hover:bg-rose-950/40 text-slate-300 hover:text-rose-300 border border-surface-border hover:border-rose-800/50 transition-all disabled:opacity-50"
+            title="Reset OpsPilot and ShopFlow to clean baseline state for demo"
+          >
+            <RotateCcw className={`w-3 h-3 ${isActionLoading ? "animate-spin" : "text-slate-400"}`} />
+            <span className="hidden md:inline">Reset</span>
           </button>
 
           {/* Polling Indicator */}

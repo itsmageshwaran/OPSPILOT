@@ -46,6 +46,7 @@ interface OpsPilotContextType {
   }) => Promise<void>;
   triggerRecoveryVerification: () => Promise<void>;
   loadBenchmark: () => Promise<void>;
+  triggerReset: () => Promise<void>;
   togglePolling: () => void;
   clearError: () => void;
 }
@@ -299,6 +300,27 @@ export const OpsPilotProvider: React.FC<{ children: ReactNode }> = ({ children }
     }
   };
 
+  const triggerReset = async () => {
+    setIsActionLoading(true);
+    setError(null);
+    try {
+      await apiClient.resetAll();
+      setSelectedIncident(null);
+      setSelectedIncidentDetails(null);
+      setRca(null);
+      setRemediation(null);
+      setRecovery(null);
+      setAudits([]);
+      setIncidents([]);
+      setAlerts([]);
+      await refreshAll();
+    } catch (err: any) {
+      setError(`Reset failed: ${err.message}`);
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
   const togglePolling = () => {
     setIsPolling((prev) => !prev);
   };
@@ -331,6 +353,7 @@ export const OpsPilotProvider: React.FC<{ children: ReactNode }> = ({ children }
         triggerRemediation,
         triggerRecoveryVerification,
         loadBenchmark,
+        triggerReset,
         togglePolling,
         clearError,
       }}

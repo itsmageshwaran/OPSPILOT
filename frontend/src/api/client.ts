@@ -168,4 +168,18 @@ export const apiClient = {
     const res = await fetch(`${BASE_URL}/api/incidents/${incidentId}/audit`);
     return handleResponse<RemediationAudit[]>(res);
   },
+
+  // Reset to Clean Demo State
+  async resetAll(): Promise<{ status: string }> {
+    const res = await fetch(`${BASE_URL}/api/reset`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    try {
+      await fetch(`http://127.0.0.1:8000/api/chaos/reset`, { method: "POST" });
+    } catch {
+      // ignore if shopflow not running
+    }
+    return handleResponse(res);
+  },
 };
