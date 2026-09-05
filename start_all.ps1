@@ -41,13 +41,16 @@ Write-Host "0. Releasing ports 8000, 8080, and 5173..." -ForegroundColor Yellow
 & "$root\kill_ports.ps1"
 
 Write-Host "1. Starting ShopFlow on port 8000..." -ForegroundColor Yellow
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "`$host.UI.RawUI.WindowTitle = 'ShopFlow (Port 8000)'; cd `"$root\shopflow-test`"; & `"$pythonExe`" -m uvicorn services.api_gateway.main:app --port 8000 --host 127.0.0.1"
+$shopflowCmd = "`$host.UI.RawUI.WindowTitle = 'ShopFlow (Port 8000)'; cd `"$root\shopflow-test`"; & '$pythonExe' -m uvicorn services.api_gateway.main:app --port 8000 --host 127.0.0.1"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", $shopflowCmd
 
 Write-Host "2. Starting OpsPilot Backend on port 8080..." -ForegroundColor Yellow
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "`$host.UI.RawUI.WindowTitle = 'OpsPilot Backend (Port 8080)'; cd `"$root\backend`"; & `"$pythonExe`" -m uvicorn app.main:app --port 8080 --host 127.0.0.1"
+$backendCmd = "`$host.UI.RawUI.WindowTitle = 'OpsPilot Backend (Port 8080)'; cd `"$root\backend`"; & '$pythonExe' -m uvicorn app.main:app --port 8080 --host 127.0.0.1"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd
 
 Write-Host "3. Starting OpsPilot Frontend on port 5173..." -ForegroundColor Yellow
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "`$host.UI.RawUI.WindowTitle = 'OpsPilot UI (Port 5173)'; cd `"$root\frontend`"; & `"$npmCmd`" run dev"
+$frontendCmd = "`$host.UI.RawUI.WindowTitle = 'OpsPilot UI (Port 5173)'; cd `"$root\frontend`"; & '$npmCmd' run dev"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCmd
 
 Start-Sleep -Seconds 4
 Write-Host "Opening OpsPilot Dashboard..." -ForegroundColor Green
