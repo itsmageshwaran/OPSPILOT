@@ -8,6 +8,9 @@ echo ""
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+echo "0. Releasing ports 8000, 8080, and 5173..."
+python "$ROOT_DIR/scripts/free_ports.py" || true
+
 echo "1. Starting ShopFlow Microservices on port 8000..."
 (cd "$ROOT_DIR/shopflow-test" && python -m uvicorn services.api_gateway.main:app --port 8000 --host 127.0.0.1) &
 SHOPFLOW_PID=$!

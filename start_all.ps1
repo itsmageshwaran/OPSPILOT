@@ -1,8 +1,12 @@
 Write-Host "===================================================" -ForegroundColor Cyan
 Write-Host "  OpsPilot - Starting Complete Incident Command Center" -ForegroundColor Green
 Write-Host "===================================================" -ForegroundColor Cyan
+Write-Host ""
 
 $root = $PSScriptRoot
+
+Write-Host "0. Releasing ports 8000, 8080, and 5173..." -ForegroundColor Yellow
+python "$root\scripts\free_ports.py"
 
 Write-Host "1. Starting ShopFlow on port 8000..." -ForegroundColor Yellow
 Start-Process wt -ArgumentList "-w 0 new-tab --title ShopFlow-8000 -d `"$root\shopflow-test`" pwsh -NoExit -Command `"python -m uvicorn services.api_gateway.main:app --port 8000 --host 127.0.0.1`"" -ErrorAction SilentlyContinue
