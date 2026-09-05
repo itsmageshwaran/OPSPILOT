@@ -91,8 +91,6 @@ def remediate_incident(
 @router.get("/{incident_id}/remediation", summary="Get latest remediation decision and status")
 def get_latest_remediation(incident_id: str, db: Session = Depends(get_db)) -> Optional[Dict[str, Any]]:
     latest = remediation_service.get_latest_remediation(db, incident_id=incident_id)
-    if not latest:
-        raise HTTPException(status_code=404, detail=f"No remediation records found for incident '{incident_id}'")
     return latest
 
 @router.get("/{incident_id}/audit", summary="Get complete immutable audit trail for incident")
