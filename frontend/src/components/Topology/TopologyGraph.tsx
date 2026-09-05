@@ -1,0 +1,227 @@
+import React, { useMemo, useEffect, useState } from "react";
+import {
+  ReactFlow,
+  Background,
+  Controls,
+  useNodesState,
+  useEdgesState,
+  type Node,
+  type Edge,
+  MarkerType,
+} from "@xyflow/react";
+import "@xyflow/react/dist/style.css";
+import { ServiceNode, type ServiceNodeData } from "./ServiceNode";
+import { useOpsPilot } from "../../context/OpsPilotContext";
+import { Network, Flame, Sparkles } from "lucide-react";
+
+const nodeTypes = {
+  serviceNode: ServiceNode,
+};
+
+export const TopologyGraph: React.FC = () => {
+  const { topology, alerts, selectedIncident, rca } = useOpsPilot();
+  const [highlightCascade, setHighlightCascade] = useState<boolean>(true);
+
+  // Compute alert count per service
+  const alertCountMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    alerts.forEach((alt) => {
+      map[alt.service] = (map[alt.service] || 0) + 1;
+    });
+    return map;
+  }, [alerts]);
+
+  // Affected services set
+  const affectedSet = useMemo(() => {
+    return new Set(selectedIncident?.affected_services || []);
+  }, [selectedIncident]);
+
+  // Root cause service ID
+  const rootCauseService =
+    rca?.root_cause_service ||
+    selectedIncident?.correlation_evidence?.causal_chain?.[0]?.service ||
+    "";
+
+  // Propagation path set
+  const propagationPath = useMemo(() => {
+    return rca?.propagation_path || [];
+  }, [rca]);
+
+  // Build React Flow Nodes & Edges dynamically from topology data
+  const { initialNodes, initialEdges } = useMemo(() => {
+    if (!topology || !topology.nodes) {
+      return { initialNodes: [], initialEdges: [] };
+    }
+
+    // Precise Left-to-Right DAG layout
+    // Rank 0: Presentation (ShopFlow Frontend)
+    // Rank 1: Edge (API Gateway)
+    // Rank 2: Core (Checkout API, Product API, Auth Service)
+    // Rank 3: Internal / Cache (Order API, Redis Cache)
+    // Rank 4: Data (PostgreSQL Database)
+    const getColumnRank = (nodeId: string, tier?: string) => {
+      const id = nodeId.toLowerCase();
+      if (id.includes("frontend") || tier === "presentation") return 0;
+      if (id.includes("gateway") || tier === "edge") return 1;
+      if (id.includes("checkout") || id.includes("product") || id.includes("auth")) return 2;
+      if (id.includes("order") || id.includes("redis") || id.includes("cache")) return 3;
+      if (id.includes("postgres") || id.includes("db") || tier === "data") return 4;
+      return 2;
+    };
+
+    // Group nodes by column
+    const columns: Record<number, typeof topology.nodes> = { 0: [], 1: [], 2: [], 3: [], 4: [] };
+    topology.nodes.forEach((node) => {
+      const rank = getColumnRank(node.id, node.tier);
+      if (!columns[rank]) columns[rank] = [];
+      columns[rank].push(node);
+    });
+
+    const flowNodes: Node[] = [];
+    const colXSpacing = 220;
+    const rowYSpacing = 115;
+
+    Object.entries(columns).forEach(([rankStr, nodesInCol]) => {
+      const colIndex = parseInt(rankStr, 10);
+      const totalInCol = nodesInCol.length;
+      const startY = 40 + Math.max(0, (3 - totalInCol) * 50);
+
+      nodesInCol.forEach((node, rowIndex) => {
+        const isRoot = rootCauseService === node.id;
+        const isAffected = affectedSet.has(node.id);
+        const nodeAlerts = alertCountMap[node.id] || 0;
+
+        flowNodes.push({
+          id: node.id,
+          type: "serviceNode",
+          position: {
+            x: 30 + colIndex * colXSpacing,
+            y: startY + rowIndex * rowYSpacing,
+          },
+          data: {
+            id: node.id,
+            name: node.name || node.id,
+            tier: node.tier,
+            criticality: node.criticality,
+            status: node.status,
+            alertCount: nodeAlerts,
+            isRootCause: isRoot,
+            isAffected: isAffected,
+          } as ServiceNodeData,
+        });
+      });
+    });
+
+    // Build flow edges
+    const flowEdges: Edge[] = (topology.edges || []).map((edge, idx) => {
+      // Check if this edge is on the failure cascade propagation path
+      const isCascadeEdge =
+        highlightCascade &&
+        propagationPath.length > 1 &&
+        ((propagationPath.includes(edge.source) && propagationPath.includes(edge.target)) ||
+          (affectedSet.has(edge.source) && affectedSet.has(edge.target)));
+
+      return {
+        id: `e-${edge.source}-${edge.target}-${idx}`,
+        source: edge.source,
+        target: edge.target,
+        animated: isCascadeEdge,
+        style: {
+          stroke: isCascadeEdge ? "#f43f5e" : "#2a3b5c",
+          strokeWidth: isCascadeEdge ? 2 : 1.2,
+          opacity: isCascadeEdge ? 1.0 : 0.6,
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: isCascadeEdge ? "#f43f5e" : "#3b82f6",
+          width: 14,
+          height: 14,
+        },
+        label: edge.protocol || undefined,
+        labelStyle: { fill: "#64748b", fontSize: 9, fontFamily: "monospace" },
+        labelBgStyle: { fill: "#080c14", fillOpacity: 0.9 },
+      };
+    });
+
+    return { initialNodes: flowNodes, initialEdges: flowEdges };
+  }, [topology, alertCountMap, affectedSet, rootCauseService, propagationPath, highlightCascade]);
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  // Sync state when dependencies change
+  useEffect(() => {
+    setNodes(initialNodes);
+    setEdges(initialEdges);
+  }, [initialNodes, initialEdges, setNodes, setEdges]);
+
+  return (
+    <div className="bg-surface-card border border-surface-border rounded-xl overflow-hidden shadow-panel flex flex-col h-[520px]">
+      {/* Topology Header */}
+      <div className="px-4 py-3 border-b border-surface-border bg-surface-panel/80 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="p-1.5 rounded-md bg-accent-sky/10 border border-accent-sky/20 text-accent-sky">
+            <Network className="w-3.5 h-3.5" />
+          </div>
+          <div>
+            <h3 className="text-xs font-semibold text-slate-100 flex items-center gap-2">
+              Live Dependency Topology
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-elevated text-slate-400 border border-surface-border font-normal">
+                NetworkX Model
+              </span>
+            </h3>
+            <p className="text-[11px] text-slate-400 font-mono">
+              Caller → Dependency Graph • {topology?.total_nodes || 0} Nodes • {topology?.total_edges || 0} Edges
+            </p>
+          </div>
+        </div>
+
+        {/* Legend & Controls */}
+        <div className="flex items-center gap-3 text-xs font-mono">
+          <button
+            onClick={() => setHighlightCascade((prev) => !prev)}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs transition-all ${
+              highlightCascade
+                ? "bg-rose-950/30 text-rose-300 border-rose-800/50"
+                : "bg-surface-elevated text-slate-400 border-surface-border"
+            }`}
+          >
+            <Flame className="w-3 h-3 text-rose-400" />
+            <span>Cascade Flow</span>
+          </button>
+
+          <div className="hidden lg:flex items-center gap-2.5 text-[11px] text-slate-400 border-l border-surface-border pl-3">
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded bg-amber-400"></span> Root-Side
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded bg-rose-500"></span> Cascaded
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded bg-emerald-400"></span> Nominal
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* React Flow Canvas */}
+      <div className="flex-1 w-full h-full relative">
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          nodeTypes={nodeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.15 }}
+          minZoom={0.5}
+          maxZoom={1.5}
+          proOptions={{ hideAttribution: true }}
+        >
+          <Background color="#1a2436" gap={18} size={1} />
+          <Controls showInteractive={false} position="bottom-right" />
+        </ReactFlow>
+      </div>
+    </div>
+  );
+};
