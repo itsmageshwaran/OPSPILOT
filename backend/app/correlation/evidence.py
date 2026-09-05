@@ -45,9 +45,12 @@ def build_correlation_evidence(
             service_first_seen[a.service] = {
                 "service": a.service,
                 "first_alert_time": a.timestamp,
+                "timestamp": a.timestamp,
                 "alert_type": a.alert_type,
                 "severity": a.severity,
                 "metric": a.metric,
+                "metric_value": a.metric_value,
+                "value": a.metric_value,
                 "message": a.message
             }
             causal_chain.append(service_first_seen[a.service])

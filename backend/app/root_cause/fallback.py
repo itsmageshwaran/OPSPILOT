@@ -327,9 +327,21 @@ class DeterministicFallbackAnalyzer:
             svc = alert.get("service", "unknown")
             atype = alert.get("alert_type", "alert")
             metric = alert.get("metric", "")
-            val = alert.get("metric_value", "")
-            ts = alert.get("timestamp", "")
-            steps.append(f"Step {idx} [{ts}]: {svc} triggered {atype} ({metric}={val})")
+            val = alert.get("metric_value") or alert.get("value")
+            ts = alert.get("first_alert_time") or alert.get("timestamp") or ""
+
+            # Clean timestamp display (HH:MM:SS or relative)
+            ts_clean = ""
+            if "T" in ts:
+                ts_clean = f" [{ts.split('T')[1][:8]}]"
+            elif len(ts) >= 19:
+                ts_clean = f" [{ts[11:19]}]"
+            elif ts:
+                ts_clean = f" [{ts}]"
+
+            val_str = f"={val}" if val is not None and val != "" else ""
+            metric_str = f" ({metric}{val_str})" if metric else ""
+            steps.append(f"Step {idx}{ts_clean}: {svc} triggered {atype}{metric_str}")
 
         narrative = "Causal Progression: " + " -> ".join(steps)
         if len(causal_chain) > 5:
