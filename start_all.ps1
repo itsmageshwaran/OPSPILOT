@@ -41,24 +41,13 @@ Write-Host "0. Releasing ports 8000, 8080, and 5173..." -ForegroundColor Yellow
 & "$root\kill_ports.ps1"
 
 Write-Host "1. Starting ShopFlow on port 8000..." -ForegroundColor Yellow
-$shopflowCmd = "`$env:PATH = `"$env:PATH`"; cd `"$root\shopflow-test`"; & `"$pythonExe`" -m uvicorn services.api_gateway.main:app --port 8000 --host 127.0.0.1"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "`$host.UI.RawUI.WindowTitle = 'ShopFlow (Port 8000)'; cd `"$root\shopflow-test`"; & `"$pythonExe`" -m uvicorn services.api_gateway.main:app --port 8000 --host 127.0.0.1"
 
 Write-Host "2. Starting OpsPilot Backend on port 8080..." -ForegroundColor Yellow
-$backendCmd = "`$env:PATH = `"$env:PATH`"; cd `"$root\backend`"; & `"$pythonExe`" -m uvicorn app.main:app --port 8080 --host 127.0.0.1"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "`$host.UI.RawUI.WindowTitle = 'OpsPilot Backend (Port 8080)'; cd `"$root\backend`"; & `"$pythonExe`" -m uvicorn app.main:app --port 8080 --host 127.0.0.1"
 
 Write-Host "3. Starting OpsPilot Frontend on port 5173..." -ForegroundColor Yellow
-$frontendCmd = "`$env:PATH = `"$env:PATH`"; cd `"$root\frontend`"; & `"$npmCmd`" run dev"
-
-$hasWt = Get-Command wt.exe -ErrorAction SilentlyContinue
-if ($hasWt) {
-    Start-Process wt -ArgumentList "-w 0 new-tab --title ShopFlow-8000 -d `"$root\shopflow-test`" powershell -NoExit -Command `"$shopflowCmd`"" -ErrorAction SilentlyContinue
-    Start-Process wt -ArgumentList "-w 0 new-tab --title OpsPilot-8080 -d `"$root\backend`" powershell -NoExit -Command `"$backendCmd`"" -ErrorAction SilentlyContinue
-    Start-Process wt -ArgumentList "-w 0 new-tab --title OpsPilot-UI -d `"$root\frontend`" powershell -NoExit -Command `"$frontendCmd`"" -ErrorAction SilentlyContinue
-} else {
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $shopflowCmd
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $backendCmd
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", $frontendCmd
-}
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "`$host.UI.RawUI.WindowTitle = 'OpsPilot UI (Port 5173)'; cd `"$root\frontend`"; & `"$npmCmd`" run dev"
 
 Start-Sleep -Seconds 4
 Write-Host "Opening OpsPilot Dashboard..." -ForegroundColor Green

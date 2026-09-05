@@ -29,13 +29,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0kill_ports.ps1"
 echo.
 
 echo 1. Starting ShopFlow Microservices on port 8000...
-start "ShopFlow (Port 8000)" cmd /k "cd /d "%~dp0shopflow-test" && set "PATH=%PATH%" && "%PYTHON_EXE%" -m uvicorn services.api_gateway.main:app --port 8000 --host 127.0.0.1"
+start "ShopFlow (Port 8000)" cmd /k "cd /d "%~dp0shopflow-test" && "%PYTHON_EXE%" -m uvicorn services.api_gateway.main:app --port 8000 --host 127.0.0.1"
 
 echo 2. Starting OpsPilot Backend on port 8080...
-start "OpsPilot Backend (Port 8080)" cmd /k "cd /d "%~dp0backend" && set "PATH=%PATH%" && "%PYTHON_EXE%" -m uvicorn app.main:app --port 8080 --host 127.0.0.1"
+start "OpsPilot Backend (Port 8080)" cmd /k "cd /d "%~dp0backend" && "%PYTHON_EXE%" -m uvicorn app.main:app --port 8080 --host 127.0.0.1"
 
 echo 3. Starting OpsPilot React Frontend on port 5173...
-start "OpsPilot Frontend (Port 5173)" cmd /k "cd /d "%~dp0frontend" && set "PATH=%PATH%" && "%NPM_EXE%" run dev"
+start "OpsPilot Frontend (Port 5173)" cmd /k "cd /d "%~dp0frontend" && "%NPM_EXE%" run dev"
 
 echo.
 echo All services launched! Waiting 4 seconds for startup...
