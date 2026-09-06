@@ -1,10 +1,12 @@
-import React, { useMemo, useEffect, useState } from "react";
+import React, { useMemo, useEffect, useState, useCallback } from "react";
 import {
   ReactFlow,
   Background,
   Controls,
   useNodesState,
   useEdgesState,
+  useReactFlow,
+  ReactFlowProvider,
   type Node,
   type Edge,
   MarkerType,
@@ -12,15 +14,75 @@ import {
 import "@xyflow/react/dist/style.css";
 import { ServiceNode, type ServiceNodeData } from "./ServiceNode";
 import { useOpsPilot } from "../../context/OpsPilotContext";
-import { Network, Flame, Sparkles } from "lucide-react";
+import { Network, Flame, Crosshair } from "lucide-react";
 
 const nodeTypes = {
   serviceNode: ServiceNode,
 };
 
+const IGNORED_SERVICES = new Set(["chaos-engine", "chaos_engine", "test-runner", "probe-client", "redis-client"]);
+
+interface TopologyFlowInnerProps {
+  initialNodes: Node[];
+  initialEdges: Edge[];
+  fitTrigger: number;
+}
+
+const TopologyFlowInner: React.FC<TopologyFlowInnerProps> = ({
+  initialNodes,
+  initialEdges,
+  fitTrigger,
+}) => {
+  const { fitView } = useReactFlow();
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+
+  // Sync state when props change
+  useEffect(() => {
+    setNodes(initialNodes);
+    setEdges(initialEdges);
+  }, [initialNodes, initialEdges, setNodes, setEdges]);
+
+  // Auto-fit view whenever nodes are updated or fitTrigger is clicked
+  useEffect(() => {
+    if (nodes.length > 0) {
+      const timer = setTimeout(() => {
+        fitView({ padding: 0.18, duration: 300 });
+      }, 60);
+      return () => clearTimeout(timer);
+    }
+  }, [nodes.length, fitTrigger, fitView]);
+
+  return (
+    <div className="flex-1 w-full h-full min-h-0 relative">
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        nodeTypes={nodeTypes}
+        fitView
+        fitViewOptions={{ padding: 0.18 }}
+        minZoom={0.3}
+        maxZoom={1.5}
+        zoomOnScroll={false}
+        panOnScroll={false}
+        zoomOnPinch={true}
+        panOnDrag={true}
+        preventScrolling={false}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background color="#1a2436" gap={18} size={1} />
+        <Controls showInteractive={false} position="bottom-right" />
+      </ReactFlow>
+    </div>
+  );
+};
+
 export const TopologyGraph: React.FC = () => {
   const { topology, alerts, selectedIncident, rca } = useOpsPilot();
   const [highlightCascade, setHighlightCascade] = useState<boolean>(true);
+  const [fitTrigger, setFitTrigger] = useState<number>(0);
 
   // Compute alert count per service
   const alertCountMap = useMemo(() => {
@@ -53,11 +115,16 @@ export const TopologyGraph: React.FC = () => {
       return { initialNodes: [], initialEdges: [] };
     }
 
+    // Filter out internal chaos / probe test actors
+    const filteredNodes = topology.nodes.filter(
+      (node) => !IGNORED_SERVICES.has(node.id.toLowerCase())
+    );
+
     // Precise Left-to-Right DAG layout
     // Rank 0: Presentation (ShopFlow Frontend)
     // Rank 1: Edge (API Gateway)
-    // Rank 2: Core (Checkout API, Product API, Auth Service)
-    // Rank 3: Internal / Cache (Order API, Redis Cache)
+    // Rank 2: Core Ingress (Checkout API, Product API, Auth Service)
+    // Rank 3: Internal / Core (Order API, Redis Cache)
     // Rank 4: Data (PostgreSQL Database)
     const getColumnRank = (nodeId: string, tier?: string) => {
       const id = nodeId.toLowerCase();
@@ -70,8 +137,8 @@ export const TopologyGraph: React.FC = () => {
     };
 
     // Group nodes by column
-    const columns: Record<number, typeof topology.nodes> = { 0: [], 1: [], 2: [], 3: [], 4: [] };
-    topology.nodes.forEach((node) => {
+    const columns: Record<number, typeof filteredNodes> = { 0: [], 1: [], 2: [], 3: [], 4: [] };
+    filteredNodes.forEach((node) => {
       const rank = getColumnRank(node.id, node.tier);
       if (!columns[rank]) columns[rank] = [];
       columns[rank].push(node);
@@ -79,12 +146,12 @@ export const TopologyGraph: React.FC = () => {
 
     const flowNodes: Node[] = [];
     const colXSpacing = 220;
-    const rowYSpacing = 115;
+    const rowYSpacing = 110;
 
     Object.entries(columns).forEach(([rankStr, nodesInCol]) => {
       const colIndex = parseInt(rankStr, 10);
       const totalInCol = nodesInCol.length;
-      const startY = 40 + Math.max(0, (3 - totalInCol) * 50);
+      const startY = 40 + Math.max(0, (3 - totalInCol) * 45);
 
       nodesInCol.forEach((node, rowIndex) => {
         const isRoot = rootCauseService === node.id;
@@ -112,50 +179,48 @@ export const TopologyGraph: React.FC = () => {
       });
     });
 
-    // Build flow edges
-    const flowEdges: Edge[] = (topology.edges || []).map((edge, idx) => {
-      // Check if this edge is on the failure cascade propagation path
-      const isCascadeEdge =
-        highlightCascade &&
-        propagationPath.length > 1 &&
-        ((propagationPath.includes(edge.source) && propagationPath.includes(edge.target)) ||
-          (affectedSet.has(edge.source) && affectedSet.has(edge.target)));
+    const activeNodeIds = new Set(flowNodes.map((n) => n.id));
 
-      return {
-        id: `e-${edge.source}-${edge.target}-${idx}`,
-        source: edge.source,
-        target: edge.target,
-        animated: isCascadeEdge,
-        style: {
-          stroke: isCascadeEdge ? "#f43f5e" : "#2a3b5c",
-          strokeWidth: isCascadeEdge ? 2 : 1.2,
-          opacity: isCascadeEdge ? 1.0 : 0.6,
-        },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: isCascadeEdge ? "#f43f5e" : "#3b82f6",
-          width: 14,
-          height: 14,
-        },
-        label: edge.observed && edge.confidence
-          ? `${edge.protocol || "HTTP"} (${Math.round(edge.confidence * 100)}%)`
-          : edge.protocol || undefined,
-        labelStyle: { fill: isCascadeEdge ? "#f43f5e" : "#64748b", fontSize: 9, fontFamily: "monospace" },
-        labelBgStyle: { fill: "#080c14", fillOpacity: 0.9 },
-      };
-    });
+    // Build flow edges, filtering out edges connected to excluded services
+    const flowEdges: Edge[] = (topology.edges || [])
+      .filter((edge) => activeNodeIds.has(edge.source) && activeNodeIds.has(edge.target))
+      .map((edge, idx) => {
+        const isCascadeEdge =
+          highlightCascade &&
+          propagationPath.length > 1 &&
+          ((propagationPath.includes(edge.source) && propagationPath.includes(edge.target)) ||
+            (affectedSet.has(edge.source) && affectedSet.has(edge.target)));
+
+        return {
+          id: `e-${edge.source}-${edge.target}-${idx}`,
+          source: edge.source,
+          target: edge.target,
+          animated: isCascadeEdge,
+          style: {
+            stroke: isCascadeEdge ? "#f43f5e" : "#2a3b5c",
+            strokeWidth: isCascadeEdge ? 2 : 1.2,
+            opacity: isCascadeEdge ? 1.0 : 0.6,
+          },
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: isCascadeEdge ? "#f43f5e" : "#3b82f6",
+            width: 14,
+            height: 14,
+          },
+          label: edge.observed && edge.confidence
+            ? `${edge.protocol || "HTTP"} (${Math.round(edge.confidence * 100)}%)`
+            : edge.protocol || undefined,
+          labelStyle: { fill: isCascadeEdge ? "#f43f5e" : "#64748b", fontSize: 9, fontFamily: "monospace" },
+          labelBgStyle: { fill: "#080c14", fillOpacity: 0.9 },
+        };
+      });
 
     return { initialNodes: flowNodes, initialEdges: flowEdges };
   }, [topology, alertCountMap, affectedSet, rootCauseService, propagationPath, highlightCascade]);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
-
-  // Sync state when dependencies change
-  useEffect(() => {
-    setNodes(initialNodes);
-    setEdges(initialEdges);
-  }, [initialNodes, initialEdges, setNodes, setEdges]);
+  const handleCenterView = useCallback(() => {
+    setFitTrigger((prev) => prev + 1);
+  }, []);
 
   return (
     <div className="bg-surface-card border border-surface-border rounded-xl overflow-hidden shadow-panel flex flex-col h-[520px]">
@@ -191,14 +256,23 @@ export const TopologyGraph: React.FC = () => {
               )}
             </div>
             <p className="text-[11px] text-slate-400 font-mono mt-0.5">
-              Source: {topology?.discovery_source || "Configured Topology"} • {topology?.total_nodes || 0} Nodes • {topology?.total_edges || 0} Edges
+              Source: {topology?.discovery_source || "Configured Topology"} • {initialNodes.length} Nodes • {initialEdges.length} Edges
               {topology?.evidence?.average_edge_confidence ? ` • Avg Conf: ${Math.round(topology.evidence.average_edge_confidence * 100)}%` : ""}
             </p>
           </div>
         </div>
 
         {/* Legend & Controls */}
-        <div className="flex items-center gap-3 text-xs font-mono">
+        <div className="flex items-center gap-2.5 text-xs font-mono">
+          <button
+            onClick={handleCenterView}
+            title="Center and fit topology graph in view"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs bg-surface-elevated text-slate-300 border-surface-border hover:border-slate-500 hover:text-white transition-all shadow-sm"
+          >
+            <Crosshair className="w-3 h-3 text-accent-sky" />
+            <span>Center View</span>
+          </button>
+
           <button
             onClick={() => setHighlightCascade((prev) => !prev)}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs transition-all ${
@@ -211,7 +285,7 @@ export const TopologyGraph: React.FC = () => {
             <span>Cascade Flow</span>
           </button>
 
-          <div className="hidden lg:flex items-center gap-2.5 text-[11px] text-slate-400 border-l border-surface-border pl-3">
+          <div className="hidden xl:flex items-center gap-2.5 text-[11px] text-slate-400 border-l border-surface-border pl-3">
             <span className="flex items-center gap-1">
               <span className="w-2 h-2 rounded bg-amber-400"></span> Root-Side
             </span>
@@ -225,24 +299,14 @@ export const TopologyGraph: React.FC = () => {
         </div>
       </div>
 
-      {/* React Flow Canvas */}
-      <div className="flex-1 w-full h-full relative">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          nodeTypes={nodeTypes}
-          fitView
-          fitViewOptions={{ padding: 0.15 }}
-          minZoom={0.5}
-          maxZoom={1.5}
-          proOptions={{ hideAttribution: true }}
-        >
-          <Background color="#1a2436" gap={18} size={1} />
-          <Controls showInteractive={false} position="bottom-right" />
-        </ReactFlow>
-      </div>
+      {/* React Flow Canvas wrapped in ReactFlowProvider */}
+      <ReactFlowProvider>
+        <TopologyFlowInner
+          initialNodes={initialNodes}
+          initialEdges={initialEdges}
+          fitTrigger={fitTrigger}
+        />
+      </ReactFlowProvider>
     </div>
   );
 };

@@ -190,7 +190,10 @@ class TopologyDiscoveryEngine:
                 )
 
     def _merge_observations(self, nodes: List[DiscoveredNode], edges: List[DiscoveredEdge]):
+        IGNORED = {"chaos-engine", "chaos_engine", "test-runner", "probe-client", "redis-client"}
         for n in nodes:
+            if n.id.lower() in IGNORED:
+                continue
             if n.id not in self.discovered_nodes:
                 self.discovered_nodes[n.id] = n
             else:
@@ -204,6 +207,8 @@ class TopologyDiscoveryEngine:
                     existing.status = n.status
 
         for e in edges:
+            if e.source.lower() in IGNORED or e.target.lower() in IGNORED:
+                continue
             key = (e.source, e.target)
             if key not in self.discovered_edges:
                 self.discovered_edges[key] = e
@@ -246,13 +251,14 @@ class TopologyDiscoveryEngine:
         """
         with self._lock:
             now = self.last_discovery_time or current_iso_timestamp()
+            IGNORED = {"chaos-engine", "chaos_engine", "test-runner", "probe-client", "redis-client"}
             if self.is_active_discovery and self.discovered_nodes:
-                nodes = [n.to_dict() for n in self.discovered_nodes.values()]
-                edges = [e.to_dict() for e in self.discovered_edges.values()]
+                nodes = [n.to_dict() for n in self.discovered_nodes.values() if n.id.lower() not in IGNORED]
+                edges = [e.to_dict() for e in self.discovered_edges.values() if e.source.lower() not in IGNORED and e.target.lower() not in IGNORED]
                 source_mode = "discovered"
             else:
-                nodes = self.fallback_nodes if self.fallback_nodes else dependency_graph.get_nodes()
-                edges = self.fallback_edges if self.fallback_edges else dependency_graph.get_edges()
+                nodes = [n for n in (self.fallback_nodes if self.fallback_nodes else dependency_graph.get_nodes()) if (n.get("id") or "").lower() not in IGNORED]
+                edges = [e for e in (self.fallback_edges if self.fallback_edges else dependency_graph.get_edges()) if (e.get("source") or "").lower() not in IGNORED and (e.get("target") or "").lower() not in IGNORED]
                 source_mode = "fallback"
 
             evidence_data = self._build_evidence_summary() if source_mode == "discovered" else {"status": "fallback_active", "reason": "No dynamic observations recorded yet"}

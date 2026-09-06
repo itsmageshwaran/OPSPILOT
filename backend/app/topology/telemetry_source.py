@@ -73,8 +73,10 @@ class ApplicationTelemetrySource(BaseTelemetrySource):
                 return "HTTPS"
             return "HTTP/REST"
 
+        IGNORED_SERVICES = {"chaos-engine", "chaos_engine", "test-runner", "probe-client", "redis-client"}
+
         def _touch_node(svc: str, source_tag: str, status: str = "Operational"):
-            if not svc:
+            if not svc or svc.lower() in IGNORED_SERVICES:
                 return
             tier, svc_type = _infer_tier_and_type(svc)
             now = current_iso_timestamp()
@@ -101,6 +103,8 @@ class ApplicationTelemetrySource(BaseTelemetrySource):
 
         def _record_edge(caller: str, dep: str, source_tag: str, sample: Optional[Dict[str, Any]] = None):
             if not caller or not dep or caller == dep:
+                return
+            if caller.lower() in IGNORED_SERVICES or dep.lower() in IGNORED_SERVICES:
                 return
             _touch_node(caller, source_tag)
             _touch_node(dep, source_tag)
