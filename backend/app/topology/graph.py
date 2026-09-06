@@ -7,11 +7,24 @@ class DependencyGraph:
         self.graph = nx.DiGraph()
         self.raw_nodes = []
         self.raw_edges = []
+        self.source = "configured"
+        self.discovery_source = "Configured Topology"
+        self.discovered_at = None
 
-    def load_from_topology(self, nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]):
+    def load_from_topology(
+        self,
+        nodes: List[Dict[str, Any]],
+        edges: List[Dict[str, Any]],
+        source: str = "configured",
+        discovery_source: str = "Configured Topology",
+        discovered_at: Optional[str] = None
+    ):
         self.graph.clear()
         self.raw_nodes = nodes
         self.raw_edges = edges
+        self.source = source
+        self.discovery_source = discovery_source
+        self.discovered_at = discovered_at
 
         for node in nodes:
             node_id = node.get("id") or node.get("service_id")
@@ -144,8 +157,23 @@ class DependencyGraph:
             return nx.shortest_path(undirected, source, target)
         return None
 
+    def get_dependencies(self, service: str) -> List[str]:
+        """Convenience alias for direct dependencies called by service."""
+        return self.get_direct_upstream_services(service)
+
+    def get_dependents(self, service: str) -> List[str]:
+        """Convenience alias for direct callers that depend on service."""
+        return self.get_direct_downstream_services(service)
+
+    def get_shortest_path(self, source: str, target: str) -> Optional[List[str]]:
+        """Convenience alias for get_path."""
+        return self.get_path(source, target)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "source": getattr(self, "source", "configured"),
+            "discovered_at": getattr(self, "discovered_at", None),
+            "discovery_source": getattr(self, "discovery_source", "Configured Topology"),
             "nodes": self.get_nodes(),
             "edges": self.get_edges(),
             "total_nodes": self.graph.number_of_nodes(),

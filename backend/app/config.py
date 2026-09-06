@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     remediation_enabled: bool = Field(default=True, validation_alias="REMEDIATION_ENABLED")
     remediation_simulation_mode: bool = Field(default=True, validation_alias="REMEDIATION_SIMULATION_MODE")
 
+    # Grafana Observability Source (Optional / Read-Only Discovery)
+    grafana_url: str = Field(default="http://127.0.0.1:3000", validation_alias="GRAFANA_URL")
+    grafana_api_key: Optional[str] = Field(default=None, validation_alias="GRAFANA_API_KEY")
+    grafana_timeout_seconds: float = Field(default=2.0, validation_alias="GRAFANA_TIMEOUT_SECONDS")
+    grafana_enabled: bool = Field(default=True, validation_alias="GRAFANA_ENABLED")
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

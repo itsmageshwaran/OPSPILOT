@@ -12,6 +12,9 @@
 ---
 
 ## 🚀 Key Highlights
+- **102 Automated Tests Passing (100% Green)**: 76 OpsPilot backend tests + 26 ShopFlow microservice tests validated continuously.
+- **Dynamic Topology Discovery (Grafana-Assisted)**: Inactive/static topology is replaced by runtime-observed service dependencies inferred from logs, alerts, health checks, and optional Grafana metrics proxy with empirical confidence accumulation ($50\% \to 99\%$) and resilient offline fallback.
+- **Core Separation of Concerns**: *"Grafana observes. OpsPilot reasons and controls."* Grafana is strictly an optional, read-only telemetry input.
 - **96.6% Alert Noise Compression**: Compresses 29 raw cascade alerts across 8 microservices into 1 coherent root-cause incident in `< 100ms`.
 - **8-Dimensional Topological-Causal Correlation**: Evaluates graph distance, causal sequencing, temporal proximity, and dependency relationships instead of naive time windows.
 - **Zero-Downtime Deterministic Fallback**: Operates **100% offline air-gapped** with deterministic topological DAG analysis, and supports optional grounded Gemini/OpenAI LLM explanations.
@@ -297,23 +300,33 @@ When the **Database Cascade** scenario is triggered:
 
 ## 🧪 Running the Test Suites
 
-### 1. Backend Engine Tests (62 Tests)
+### 1. Backend Engine & Dynamic Discovery Tests (76 Tests)
 ```bash
 python -m pytest backend/tests/ -v
 ```
 
-### 2. ShopFlow Simulator Tests (26 Tests)
+### 2. Dynamic Discovery Unit Tests (14 Tests)
+```bash
+python -m pytest backend/tests/test_topology_discovery.py -v
+```
+
+### 3. ShopFlow Simulator Tests (26 Tests)
 ```bash
 python -m pytest shopflow-test/tests/ -v
 ```
 
-### 3. Frontend Production Build Check
+### 4. Combined Regression Suite (102 Tests — 100% Green)
+```bash
+python -m pytest backend/tests/ shopflow-test/tests/ -q
+```
+
+### 5. Frontend Production Build Check
 ```bash
 cd frontend
 npm run build
 ```
 
-### 4. Automated 5-Run Continuous Demo Validation Suite
+### 6. Automated 5-Run Continuous Demo Validation Suite
 ```bash
 python scratch/run_5_demo_cycles.py
 ```

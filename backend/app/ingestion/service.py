@@ -8,6 +8,8 @@ from .normalizer import TelemetryNormalizer
 from app.database.repository import TelemetryRepository
 from app.topology.graph import dependency_graph
 
+from app.topology.discovery import topology_discovery_engine
+
 logger = logging.getLogger("opspilot.ingestion_service")
 
 class IngestionService:
@@ -40,10 +42,26 @@ class IngestionService:
                 "edges_count": len(TelemetryRepository.get_dependencies(db))
             }
 
-        # 2. Fetch and synchronize Topology & Services
+        # 2. Fetch raw telemetry from target environment
         raw_topology = self.adapter.fetch_topology()
-        nodes = raw_topology.get("nodes", [])
-        edges = raw_topology.get("edges", [])
+        raw_alerts = self.adapter.fetch_alerts(limit=500)
+        raw_logs = self.adapter.fetch_logs(limit=500)
+        raw_metrics = self.adapter.fetch_metrics()
+        raw_events = self.adapter.fetch_events(limit=500)
+        raw_health_summary = self.adapter.fetch_health_summary()
+
+        # 3. Dynamic Topology Discovery from observed telemetry & optional Grafana
+        discovery_result = topology_discovery_engine.discover_from_sync(
+            fallback_topology=raw_topology,
+            logs=raw_logs,
+            alerts=raw_alerts,
+            metrics=raw_metrics,
+            health_data=raw_health_summary,
+            events=raw_events
+        )
+
+        nodes = discovery_result.nodes
+        edges = discovery_result.edges
 
         # Update Database Services & Dependencies
         for node_dict in nodes:
@@ -56,11 +74,7 @@ class IngestionService:
             if dep_obj:
                 TelemetryRepository.upsert_dependency(db, dep_obj)
 
-        # Update in-memory NetworkX Dependency Graph
-        dependency_graph.load_from_topology(nodes, edges)
-
-        # 3. Ingest and Deduplicate Alerts
-        raw_alerts = self.adapter.fetch_alerts(limit=500)
+        # 4. Ingest and Deduplicate Alerts
         normalized_alerts = []
         for a_dict in raw_alerts:
             a_obj = TelemetryNormalizer.normalize_alert(a_dict)
@@ -68,8 +82,7 @@ class IngestionService:
                 normalized_alerts.append(a_obj)
         new_alerts_count = TelemetryRepository.save_alerts(db, normalized_alerts)
 
-        # 4. Ingest and Deduplicate Logs
-        raw_logs = self.adapter.fetch_logs(limit=500)
+        # 5. Ingest and Deduplicate Logs
         normalized_logs = []
         for l_dict in raw_logs:
             l_obj = TelemetryNormalizer.normalize_log(l_dict)
@@ -77,13 +90,11 @@ class IngestionService:
                 normalized_logs.append(l_obj)
         new_logs_count = TelemetryRepository.save_logs(db, normalized_logs)
 
-        # 5. Ingest Metrics
-        raw_metrics = self.adapter.fetch_metrics()
+        # 6. Ingest Metrics
         normalized_metrics = TelemetryNormalizer.normalize_metrics_snapshot(raw_metrics)
         new_metrics_count = TelemetryRepository.save_metrics(db, normalized_metrics)
 
-        # 6. Ingest and Deduplicate Events
-        raw_events = self.adapter.fetch_events(limit=500)
+        # 7. Ingest and Deduplicate Events
         normalized_events = []
         for e_dict in raw_events:
             e_obj = TelemetryNormalizer.normalize_event(e_dict)
@@ -93,7 +104,8 @@ class IngestionService:
 
         logger.info(
             f"ShopFlow sync completed: {new_alerts_count} new alerts, {new_logs_count} new logs, "
-            f"{new_metrics_count} new metrics, {new_events_count} new events"
+            f"{new_metrics_count} new metrics, {new_events_count} new events. "
+            f"Topology: {len(nodes)} nodes, {len(edges)} edges ({discovery_result.source})"
         )
 
         return {
@@ -107,7 +119,10 @@ class IngestionService:
             "new_metrics": new_metrics_count,
             "new_events": new_events_count,
             "services_count": len(nodes),
-            "edges_count": len(edges)
+            "edges_count": len(edges),
+            "discovery_source": discovery_result.discovery_source,
+            "discovery_mode": discovery_result.source,
+            "grafana_connected": discovery_result.grafana_connected
         }
 
 ingestion_service = IngestionService()

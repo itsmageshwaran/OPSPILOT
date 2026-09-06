@@ -29,6 +29,23 @@ async def lifespan(app: FastAPI):
     # Startup: initialize database tables
     logger.info("Initializing OpsPilot SQLite database...")
     init_db()
+    try:
+        import yaml, os
+        from app.topology.discovery import topology_discovery_engine
+        possible_paths = [
+            os.path.join(os.getcwd(), "config", "topology.yaml"),
+            os.path.join(os.getcwd(), "..", "shopflow-test", "config", "topology.yaml"),
+            os.path.join(os.getcwd(), "shopflow-test", "config", "topology.yaml"),
+        ]
+        for p in possible_paths:
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    topo = yaml.safe_load(f)
+                    topology_discovery_engine.register_fallback_topology(topo.get("nodes", []), topo.get("edges", []))
+                    logger.info(f"Loaded fallback topology baseline from {p}")
+                break
+    except Exception as e:
+        logger.debug(f"Notice during startup topology load: {e}")
     logger.info("OpsPilot backend service ready.")
     yield
     # Shutdown

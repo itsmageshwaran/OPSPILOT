@@ -137,8 +137,10 @@ export const TopologyGraph: React.FC = () => {
           width: 14,
           height: 14,
         },
-        label: edge.protocol || undefined,
-        labelStyle: { fill: "#64748b", fontSize: 9, fontFamily: "monospace" },
+        label: edge.observed && edge.confidence
+          ? `${edge.protocol || "HTTP"} (${Math.round(edge.confidence * 100)}%)`
+          : edge.protocol || undefined,
+        labelStyle: { fill: isCascadeEdge ? "#f43f5e" : "#64748b", fontSize: 9, fontFamily: "monospace" },
         labelBgStyle: { fill: "#080c14", fillOpacity: 0.9 },
       };
     });
@@ -164,14 +166,33 @@ export const TopologyGraph: React.FC = () => {
             <Network className="w-3.5 h-3.5" />
           </div>
           <div>
-            <h3 className="text-xs font-semibold text-slate-100 flex items-center gap-2">
-              Live Dependency Topology
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-elevated text-slate-400 border border-surface-border font-normal">
-                NetworkX Model
-              </span>
-            </h3>
-            <p className="text-[11px] text-slate-400 font-mono">
-              Caller → Dependency Graph • {topology?.total_nodes || 0} Nodes • {topology?.total_edges || 0} Edges
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-semibold text-slate-100">
+                Live Dependency Topology
+              </h3>
+              {topology?.source === "discovered" ? (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/50 text-emerald-300 border border-emerald-800/60 flex items-center gap-1 font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  DYNAMICALLY DISCOVERED
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-elevated text-slate-400 border border-surface-border font-normal">
+                  CONFIGURED FALLBACK
+                </span>
+              )}
+              {topology?.grafana_connected ? (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-950/40 text-amber-300 border border-amber-800/50">
+                  Grafana: Connected
+                </span>
+              ) : (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-900/80 text-slate-500 border border-surface-border">
+                  Grafana: Offline (Safe)
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+              Source: {topology?.discovery_source || "Configured Topology"} • {topology?.total_nodes || 0} Nodes • {topology?.total_edges || 0} Edges
+              {topology?.evidence?.average_edge_confidence ? ` • Avg Conf: ${Math.round(topology.evidence.average_edge_confidence * 100)}%` : ""}
             </p>
           </div>
         </div>

@@ -29,6 +29,27 @@ export interface TopologyEdge {
   protocol?: string;
   type?: string;
   criticality?: string;
+  observed?: boolean;
+  evidence_count?: number;
+  confidence?: number;
+  evidence_sources?: string[];
+  last_observed?: string;
+}
+
+export interface EdgeEvidenceItem {
+  count: number;
+  confidence: number;
+  sources: string[];
+  last_observed?: string;
+}
+
+export interface TopologyEvidenceSummary {
+  total_observations?: number;
+  sources?: string[];
+  average_edge_confidence?: number;
+  edges_evidence?: Record<string, EdgeEvidenceItem>;
+  status?: string;
+  reason?: string;
 }
 
 export interface TopologyData {
@@ -36,6 +57,13 @@ export interface TopologyData {
   edges: TopologyEdge[];
   total_nodes: number;
   total_edges: number;
+  source?: "discovered" | "fallback" | string;
+  discovered_at?: string;
+  discovery_source?: string;
+  grafana_connected?: boolean;
+  grafana_status?: string;
+  evidence?: TopologyEvidenceSummary;
+  evidence_summary?: TopologyEvidenceSummary;
 }
 
 export interface PairwiseScore {
