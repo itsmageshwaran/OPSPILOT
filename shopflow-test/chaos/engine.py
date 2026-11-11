@@ -104,6 +104,8 @@ class ChaosEngine:
             # Spawn runner thread
             if scenario_id == "database_cascade":
                 self._thread = threading.Thread(target=self._run_database_cascade_scenario, daemon=True)
+            elif scenario_id == "network_partition":
+                self._thread = threading.Thread(target=self._run_network_partition_scenario, daemon=True)
             else:
                 self._thread = threading.Thread(target=self._run_generic_scenario, args=(scenario,), daemon=True)
             
@@ -321,6 +323,184 @@ class ChaosEngine:
         emit_alert("product-api", "INFO", "DB_LATENCY_SPILLOVER", "product_db_query_latency_ms", 220.0, 150.0, "Product API experiencing slight latency bump from shared postgresql host contention", timestamp=get_ts(10.7), dependency="postgresql", tags={"host": "pg-primary-01"})
         emit_alert("redis", "INFO", "CACHE_QUERY_SPIKE", "redis_ops_per_sec", 410.0, 350.0, "Redis cache traffic increased as frontend falls back to cached catalog data", timestamp=get_ts(11.0), dependency="redis", tags={"cache_tier": "l2"})
         emit_alert("auth-service", "WARNING", "DB_TIMEOUT_WARNING", "auth_db_latency_ms", 380.0, 200.0, "Auth Service token verification encountering elevated PostgreSQL session query times", timestamp=get_ts(11.3), dependency="postgresql", tags={"endpoint": "/auth/verify"})
+
+        with self._mutex:
+            self.status.state = "COMPLETED"
+            self.status.alert_count = len(telemetry_engine.alert_buffer)
+
+    def _run_network_partition_scenario(self):
+        """
+        Executes Toxiproxy/eBPF-style network partition fault injection specifically on
+        the connection between api-gateway and auth-service.
+        Simulates 85% packet loss, 2000ms - 5000ms latency jitter, tcp_retransmits,
+        dropped_packets, and connection_timeouts.
+        """
+        base_time = datetime.now(timezone.utc)
+        scenario = ALL_SCENARIOS["network_partition"]
+
+        def get_ts(offset_sec: float) -> str:
+            return (base_time + timedelta(seconds=offset_sec)).isoformat()
+
+        # STAGE 1: Latency Jitter & Egress Packet Drop (T+0s)
+        if self._stop_event.is_set(): return
+        with self._mutex:
+            self.status.current_stage = 1
+            self.status.affected_services = ["api-gateway"]
+
+        telemetry_engine.update_metrics("api-gateway", **scenario.stages[0].metrics_override)
+        telemetry_engine.record_event(SystemEvent(
+            service="api-gateway",
+            event_type="SCENARIO_STAGE_TRANSITION",
+            description="Stage 1/3: Latency Jitter & Egress Packet Drop - Toxiproxy jitter filter applied to auth-service link.",
+            severity="WARNING",
+            payload={"stage": 1, "service": "api-gateway", "filter": "toxiproxy_jitter"}
+        ))
+        logger.warn(
+            "TCP_RETRANSMIT_SPIKE",
+            "Elevated TCP retransmission count observed on egress socket to auth-service:8005",
+            dependency="auth-service",
+            latency_ms=1200.0,
+            metadata={"tcp_retransmits": 68, "dropped_packets": 240}
+        )
+        emit_alert(
+            service="api-gateway",
+            severity="WARNING",
+            alert_type="NETWORK_LATENCY_JITTER",
+            metric="latency_p90_ms",
+            metric_value=1200.0,
+            threshold=250.0,
+            message="Egress latency jitter spiked on socket connection to auth-service: 1200ms p90",
+            dependency="auth-service",
+            timestamp=get_ts(0.2),
+            tags={"edge": "api-gateway->auth-service", "protocol": "TCP"}
+        )
+        emit_alert(
+            service="api-gateway",
+            severity="WARNING",
+            alert_type="TCP_RETRANSMITS_HIGH",
+            metric="tcp_retransmits",
+            metric_value=68.0,
+            threshold=15.0,
+            message="TCP retransmits threshold exceeded on api-gateway -> auth-service egress",
+            dependency="auth-service",
+            timestamp=get_ts(0.5),
+            tags={"socket": "eth0", "peer": "auth-service:8005"}
+        )
+
+        time.sleep(1.0 if self.demo_mode else 3.0)
+
+        # STAGE 2: Severe Network Partition (85% Drop Rate, 2000-5000ms Jitter) (T+2s)
+        if self._stop_event.is_set(): return
+        with self._mutex:
+            self.status.current_stage = 2
+            self.status.affected_services = ["api-gateway", "auth-service"]
+
+        telemetry_engine.update_metrics("auth-service", **scenario.stages[1].metrics_override)
+        telemetry_engine.record_event(SystemEvent(
+            service="auth-service",
+            event_type="SCENARIO_STAGE_TRANSITION",
+            description="Stage 2/3: Severe Network Partition - 85% packet loss and 2000-5000ms jitter between api-gateway and auth-service.",
+            severity="CRITICAL",
+            payload={"stage": 2, "packet_loss_pct": 85.0, "latency_jitter_range": "2000ms-5000ms"}
+        ))
+        logger.error(
+            "NETWORK_PARTITION",
+            "eBPF tc packet filter dropping 85.0% of TCP SYN/ACK segments to auth-service:8005",
+            dependency="auth-service",
+            status_code=504,
+            latency_ms=4980.0,
+            metadata={"packet_loss_pct": 85.0, "tcp_retransmits": 420, "dropped_packets": 2150}
+        )
+        logger.error(
+            "CONNECTION_TIMEOUT",
+            "Socket connect timeout after 5000ms on http://auth-service:8005/auth/verify",
+            dependency="auth-service",
+            status_code=504,
+            latency_ms=5000.0
+        )
+        emit_alert(
+            service="api-gateway",
+            severity="CRITICAL",
+            alert_type="NETWORK_PACKET_LOSS",
+            metric="packet_loss_pct",
+            metric_value=85.0,
+            threshold=10.0,
+            message="Severe packet loss (85.0%) detected on virtual link to auth-service",
+            dependency="auth-service",
+            timestamp=get_ts(2.1),
+            tags={"edge": "api-gateway->auth-service", "filter": "ebpf_tc_drop"}
+        )
+        emit_alert(
+            service="api-gateway",
+            severity="CRITICAL",
+            alert_type="CONNECTION_TIMEOUT",
+            metric="connection_timeouts",
+            metric_value=115.0,
+            threshold=5.0,
+            message="Connection timeout storm: 115 socket timeouts attempting to reach auth-service",
+            dependency="auth-service",
+            timestamp=get_ts(2.4),
+            tags={"endpoint": "/auth/verify", "timeout_limit_ms": "5000"}
+        )
+        emit_alert(
+            service="auth-service",
+            severity="CRITICAL",
+            alert_type="SERVICE_UNREACHABLE",
+            metric="availability_pct",
+            metric_value=15.0,
+            threshold=99.0,
+            message="Auth-service partitioned from API Gateway ingress; unable to service token verifications",
+            timestamp=get_ts(2.7),
+            tags={"state": "partitioned", "cluster": "shopflow-core"}
+        )
+
+        time.sleep(1.0 if self.demo_mode else 3.0)
+
+        # STAGE 3: Upstream Cascading Authentication Failure (T+4s)
+        if self._stop_event.is_set(): return
+        with self._mutex:
+            self.status.current_stage = 3
+            self.status.affected_services = ["api-gateway", "auth-service", "order-api", "checkout-api"]
+            self.status.recovery_status = "CRITICAL_OUTAGE"
+
+        telemetry_engine.update_metrics("api-gateway", **scenario.stages[2].metrics_override)
+        telemetry_engine.record_event(SystemEvent(
+            service="api-gateway",
+            event_type="SCENARIO_STAGE_TRANSITION",
+            description="Stage 3/3: Upstream Cascading Auth Failure - Gateway returning 504 Gateway Timeout and 401 to clients.",
+            severity="CRITICAL",
+            payload={"stage": 3, "service": "api-gateway", "status": "Major Outage"}
+        ))
+        logger.error(
+            "AUTH_VERIFICATION_FAILED",
+            "Cascading auth failure: 74% of ingress requests rejected due to auth-service network partition",
+            dependency="auth-service",
+            status_code=504
+        )
+        emit_alert(
+            service="api-gateway",
+            severity="CRITICAL",
+            alert_type="AUTH_GATEWAY_TIMEOUT",
+            metric="error_rate_pct",
+            metric_value=74.0,
+            threshold=5.0,
+            message="API Gateway returned 504 Gateway Timeout on /auth and downstream authenticated routes",
+            dependency="auth-service",
+            timestamp=get_ts(4.2),
+            tags={"gateway_route": "/api/v1/auth", "error_type": "504"}
+        )
+        emit_alert(
+            service="checkout-api",
+            severity="WARNING",
+            alert_type="TOKEN_VALIDATION_TIMEOUT",
+            metric="latency_p99_ms",
+            metric_value=3200.0,
+            threshold=400.0,
+            message="Checkout-api token validation timed out waiting for auth token verification",
+            dependency="auth-service",
+            timestamp=get_ts(4.5),
+            tags={"dependency": "auth-service"}
+        )
 
         with self._mutex:
             self.status.state = "COMPLETED"

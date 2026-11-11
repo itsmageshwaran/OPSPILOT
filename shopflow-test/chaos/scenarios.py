@@ -289,8 +289,82 @@ SCENARIO_UNKNOWN_ISSUE = ChaosScenario(
     ]
 )
 
+SCENARIO_NETWORK_PARTITION = ChaosScenario(
+    id="network_partition",
+    name="API Gateway to Auth Service Network Partition",
+    description="Simulates Toxiproxy/eBPF network fault injection on edge api-gateway -> auth-service with 85% packet loss, 2000-5000ms latency jitter, tcp retransmits, and connection timeouts.",
+    severity="CRITICAL",
+    primary_fault_service="auth-service",
+    duration_seconds=45,
+    stages=[
+        ChaosStage(
+            stage=1,
+            name="Latency Jitter & Egress Packet Drop",
+            offset_seconds=0,
+            service="api-gateway",
+            state="Degraded",
+            customer_impact="low",
+            description="Toxiproxy jitter filter injected on api-gateway -> auth-service edge: 40% packet drop, latency elevated to 1200ms.",
+            metrics_override={
+                "latency_p50_ms": 450.0,
+                "latency_p90_ms": 1200.0,
+                "latency_p99_ms": 2200.0,
+                "packet_loss_pct": 40.0,
+                "tcp_retransmits": 68,
+                "dropped_packets": 240,
+                "connection_timeouts": 12,
+                "error_rate_pct": 18.0,
+                "status": "Degraded"
+            }
+        ),
+        ChaosStage(
+            stage=2,
+            name="Severe Network Partition (85% Drop Rate)",
+            offset_seconds=2,
+            service="auth-service",
+            state="Major Outage",
+            customer_impact="high",
+            description="Partition threshold reached: 85% packet drop rate and 2000ms-5000ms jitter between api-gateway and auth-service. JWT validation failing.",
+            metrics_override={
+                "latency_p50_ms": 2600.0,
+                "latency_p90_ms": 4100.0,
+                "latency_p99_ms": 4980.0,
+                "packet_loss_pct": 85.0,
+                "tcp_retransmits": 420,
+                "dropped_packets": 2150,
+                "connection_timeouts": 115,
+                "error_rate_pct": 85.0,
+                "availability_pct": 15.0,
+                "status": "Major Outage"
+            }
+        ),
+        ChaosStage(
+            stage=3,
+            name="Upstream Cascading Authentication Failure",
+            offset_seconds=4,
+            service="api-gateway",
+            state="Major Outage",
+            customer_impact="critical",
+            description="API Gateway unable to authenticate customer requests. Upstream 504 Gateway Timeout and 401 Unauthorized storm.",
+            metrics_override={
+                "latency_p50_ms": 2900.0,
+                "latency_p90_ms": 4800.0,
+                "latency_p99_ms": 5200.0,
+                "packet_loss_pct": 85.0,
+                "tcp_retransmits": 610,
+                "dropped_packets": 3400,
+                "connection_timeouts": 180,
+                "error_rate_pct": 74.0,
+                "availability_pct": 26.0,
+                "status": "Major Outage"
+            }
+        )
+    ]
+)
+
 ALL_SCENARIOS: Dict[str, ChaosScenario] = {
     "database_cascade": SCENARIO_DATABASE_CASCADE,
+    "network_partition": SCENARIO_NETWORK_PARTITION,
     "redis_failure": SCENARIO_REDIS_FAILURE,
     "high_memory": SCENARIO_HIGH_MEMORY,
     "high_latency": SCENARIO_HIGH_LATENCY,

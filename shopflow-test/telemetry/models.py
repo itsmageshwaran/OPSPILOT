@@ -64,3 +64,8 @@ class ServiceMetrics(BaseModel):
     redis_misses: int = 12
     availability_pct: float = 100.0
     status: str = "Operational"  # Operational, Degraded, Major Outage, Recovering
+    # Network Chaos Simulation Metrics (Toxiproxy / eBPF)
+    tcp_retransmits: int = 0
+    dropped_packets: int = 0
+    connection_timeouts: int = 0
+    packet_loss_pct: float = 0.0

@@ -291,7 +291,7 @@ class RecoveryEvidence(BaseModel):
 | Method | Path | Request Body | Response Model / Status | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `GET` | `/health` | None | `{"status": "healthy", "shopflow": "connected"}` | Health status of OpsPilot and target connectivity. |
-| `POST` | `/api/reset` | None | `{"status": "success"}` | Resets SQLite database tables to clean initial state. |
+| `POST` | `/api/reset` | None | `{"status": "success", "shopflow_reset": "success"}` | Clears OpsPilot tables and asks the configured ShopFlow target to reset its chaos state. `shopflow_reset` is `unavailable` when the target cannot be reached. |
 | `POST` | `/api/sync/shopflow` | None | Ingestion summary payload | Pulls topology, alerts, metrics, logs, and events from ShopFlow. |
 | `GET` | `/api/topology` | None | `DiscoveredTopologyResult` | Current runtime topology graph (nodes, edges, confidence). |
 | `POST` | `/api/topology/discover` | None | `DiscoveredTopologyResult` | Triggers active inspection pass for dynamic topology. |

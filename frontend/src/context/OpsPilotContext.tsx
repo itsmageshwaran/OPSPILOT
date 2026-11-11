@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { apiClient } from "../api/client";
 import type {
   HealthStatus,
@@ -75,43 +75,34 @@ export const OpsPilotProvider: React.FC<{ children: ReactNode }> = ({ children }
   const [isPolling, setIsPolling] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const activeIncidentId = useRef<string | null>(null);
 
   const clearError = () => setError(null);
 
   const loadIncidentDetails = useCallback(async (incidentId: string) => {
     try {
-      const details = await apiClient.getIncident(incidentId);
+      const [details, rcaData, remData, auditList] = await Promise.all([
+        apiClient.getIncident(incidentId),
+        apiClient.getRootCause(incidentId).catch(() => null),
+        apiClient.getLatestRemediation(incidentId).catch(() => null),
+        apiClient.getIncidentAuditTrail(incidentId).catch(() => []),
+      ]);
+      if (activeIncidentId.current !== incidentId) return;
       setSelectedIncidentDetails(details);
-
-      // Try fetching RCA
-      try {
-        const rcaData = await apiClient.getRootCause(incidentId);
-        setRca(rcaData);
-      } catch {
-        setRca(null);
-      }
-
-      // Try fetching latest remediation
-      try {
-        const remData = await apiClient.getLatestRemediation(incidentId);
-        setRemediation(remData);
-        if (remData && remData.recovery_evidence) {
-          setRecovery(remData.recovery_evidence);
-        }
-      } catch {
-        setRemediation(null);
-        setRecovery(null);
-      }
-
-      // Fetch audit history
-      try {
-        const auditList = await apiClient.getIncidentAuditTrail(incidentId);
-        setAudits(auditList);
-      } catch {
-        setAudits([]);
-      }
+      setRca(rcaData);
+      setRemediation(remData);
+      setRecovery(remData?.recovery_evidence || null);
+      setAudits(auditList);
     } catch (err: any) {
       console.error("Failed to load incident details:", err);
+      if (activeIncidentId.current === incidentId) {
+        setSelectedIncidentDetails(null);
+        setRca(null);
+        setRemediation(null);
+        setRecovery(null);
+        setAudits([]);
+        setError(`Incident details failed to load: ${err.message}`);
+      }
     }
   }, []);
 
@@ -133,14 +124,19 @@ export const OpsPilotProvider: React.FC<{ children: ReactNode }> = ({ children }
         setIncidents(incs);
         // Automatically select the first incident if none selected or if selected is outdated
         if (incs.length > 0) {
-          if (!selectedIncident || !incs.some((i) => i.incident_id === selectedIncident.incident_id)) {
-            setSelectedIncident(incs[0]);
-            loadIncidentDetails(incs[0].incident_id);
+          const currentIncident = selectedIncident
+            ? incs.find((i) => i.incident_id === selectedIncident.incident_id)
+            : undefined;
+          const nextIncident = currentIncident || incs[0];
+          if (!selectedIncident || !currentIncident || currentIncident.updated_at !== selectedIncident.updated_at) {
+            activeIncidentId.current = nextIncident.incident_id;
+            setSelectedIncident(nextIncident);
+            await loadIncidentDetails(nextIncident.incident_id);
           } else {
-            // Refresh details for current selected
-            loadIncidentDetails(selectedIncident.incident_id);
+            setSelectedIncident(currentIncident);
           }
         } else {
+          activeIncidentId.current = null;
           setSelectedIncident(null);
           setSelectedIncidentDetails(null);
           setRca(null);
@@ -162,20 +158,35 @@ export const OpsPilotProvider: React.FC<{ children: ReactNode }> = ({ children }
     refreshAll();
   }, []);
 
-  // Polling loop
+  // Poll at a measured cadence and schedule the next refresh only after the
+  // current one finishes, so slow API responses cannot stack up.
   useEffect(() => {
     if (!isPolling) return;
-    const timer = setInterval(() => {
-      refreshAll();
-    }, 1500);
-    return () => clearInterval(timer);
+    let timer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+    const poll = async () => {
+      await refreshAll();
+      if (!cancelled) timer = setTimeout(poll, 5000);
+    };
+    timer = setTimeout(poll, 5000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [isPolling, refreshAll]);
 
   const selectIncident = async (incident: Incident | null) => {
+    activeIncidentId.current = incident?.incident_id || null;
     setSelectedIncident(incident);
     if (incident) {
+      setSelectedIncidentDetails(null);
+      setRca(null);
+      setRemediation(null);
+      setRecovery(null);
+      setAudits([]);
       await loadIncidentDetails(incident.incident_id);
     } else {
+      activeIncidentId.current = null;
       setSelectedIncidentDetails(null);
       setRca(null);
       setRemediation(null);
@@ -206,6 +217,7 @@ export const OpsPilotProvider: React.FC<{ children: ReactNode }> = ({ children }
       const res = await apiClient.runCorrelation(strategy, true);
       await refreshAll();
       if (res.incidents && res.incidents.length > 0) {
+        activeIncidentId.current = res.incidents[0].incident_id;
         setSelectedIncident(res.incidents[0]);
         await loadIncidentDetails(res.incidents[0].incident_id);
       }
@@ -304,7 +316,8 @@ export const OpsPilotProvider: React.FC<{ children: ReactNode }> = ({ children }
     setIsActionLoading(true);
     setError(null);
     try {
-      await apiClient.resetAll();
+      const resetResult = await apiClient.resetAll();
+      activeIncidentId.current = null;
       setSelectedIncident(null);
       setSelectedIncidentDetails(null);
       setRca(null);
@@ -314,6 +327,9 @@ export const OpsPilotProvider: React.FC<{ children: ReactNode }> = ({ children }
       setIncidents([]);
       setAlerts([]);
       await refreshAll();
+      if (resetResult.shopflow_reset === "unavailable") {
+        setError("OpsPilot was reset, but ShopFlow could not be reached. Start ShopFlow and reset again to clear its chaos state.");
+      }
     } catch (err: any) {
       setError(`Reset failed: ${err.message}`);
     } finally {

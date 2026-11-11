@@ -8,8 +8,14 @@ echo ""
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "0. Releasing ports 8000, 8080, and 5173..."
-python "$ROOT_DIR/scripts/free_ports.py" || true
+echo "0. Checking required ports..."
+for port in 8000 8080 5173; do
+  if command -v lsof >/dev/null 2>&1 && lsof -ti:"$port" >/dev/null 2>&1; then
+    echo "Port $port is already in use. Existing processes were left running."
+    echo "Stop the app using it before starting OpsPilot."
+    exit 1
+  fi
+done
 
 echo "1. Starting ShopFlow Microservices on port 8000..."
 (cd "$ROOT_DIR/shopflow-test" && python -m uvicorn services.api_gateway.main:app --port 8000 --host 127.0.0.1) &

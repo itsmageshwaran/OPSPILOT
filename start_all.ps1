@@ -37,8 +37,15 @@ Write-Host "  OpsPilot - Starting Complete Incident Command Center" -ForegroundC
 Write-Host "===================================================" -ForegroundColor Cyan
 Write-Host ""
 
-Write-Host "0. Releasing ports 8000, 8080, and 5173..." -ForegroundColor Yellow
-& "$root\kill_ports.ps1"
+Write-Host "0. Checking required ports..." -ForegroundColor Yellow
+$busyPorts = @(8000, 8080, 5173) | Where-Object {
+    Get-NetTCPConnection -LocalPort $_ -State Listen -ErrorAction SilentlyContinue
+}
+if ($busyPorts.Count -gt 0) {
+    Write-Host "These ports are already in use: $($busyPorts -join ', '). Existing processes were left running." -ForegroundColor Red
+    Write-Host "Close those apps or run .\kill_ports.ps1 -Force if you intend to stop them." -ForegroundColor Yellow
+    exit 1
+}
 
 Write-Host "1. Starting ShopFlow on port 8000..." -ForegroundColor Yellow
 $shopflowCmd = "`$host.UI.RawUI.WindowTitle = 'ShopFlow (Port 8000)'; cd `"$root\shopflow-test`"; & '$pythonExe' -m uvicorn services.api_gateway.main:app --port 8000 --host 127.0.0.1"

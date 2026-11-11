@@ -31,5 +31,10 @@ def reset_opspilot_database(db: Session = Depends(get_db)):
     """
     from app.database.repository import TelemetryRepository
     TelemetryRepository.clear_all(db)
-    return {"status": "success", "message": "OpsPilot database reset to clean state"}
+    shopflow_reset = shopflow_adapter.reset_chaos()
+    return {
+        "status": "success",
+        "message": "OpsPilot database reset to clean state",
+        "shopflow_reset": "success" if shopflow_reset else "unavailable",
+    }
 

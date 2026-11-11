@@ -7,6 +7,16 @@ class Settings(BaseSettings):
     environment: str = "development"
     port: int = 8080
     host: str = "0.0.0.0"
+
+    # Comma-separated browser origins allowed to call the backend directly.
+    cors_allowed_origins: str = Field(
+        default="http://localhost:5173,http://127.0.0.1:5173",
+        validation_alias="CORS_ALLOWED_ORIGINS",
+    )
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
     
     # External ShopFlow Environment
     shopflow_base_url: str = Field(default="http://127.0.0.1:8000", validation_alias="SHOPFLOW_BASE_URL")

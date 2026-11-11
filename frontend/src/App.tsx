@@ -12,6 +12,7 @@ import { RecoveryBanner } from "./components/Recovery/RecoveryBanner";
 import { AuditTimeline } from "./components/Audit/AuditTimeline";
 import { AlertFeed } from "./components/Alerts/AlertFeed";
 import { BenchmarkModal } from "./components/Correlation/BenchmarkModal";
+import { ChatOpsTerminal } from "./components/ChatOps/Terminal";
 import { AlertCircle, X } from "lucide-react";
 
 const MainDashboard: React.FC = () => {
@@ -80,6 +81,9 @@ const MainDashboard: React.FC = () => {
         isOpen={isBenchmarkOpen}
         onClose={() => setIsBenchmarkOpen(false)}
       />
+
+      {/* Sliding ChatOps NLQ Terminal */}
+      <ChatOpsTerminal />
 
       {/* Footer */}
       <footer className="border-t border-dark-800 bg-dark-950 px-6 py-4 text-center text-xs font-mono text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-2">

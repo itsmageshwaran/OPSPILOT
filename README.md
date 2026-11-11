@@ -12,7 +12,7 @@
 ---
 
 ## 🚀 Key Highlights
-- **102 Automated Tests Passing (100% Green)**: 76 OpsPilot backend tests + 26 ShopFlow microservice tests validated continuously.
+- **Automated Test Suites**: OpsPilot backend and ShopFlow simulator tests cover correlation, safety, recovery, topology, and chaos scenarios.
 - **Dynamic Topology Discovery (Grafana-Assisted)**: Inactive/static topology is replaced by runtime-observed service dependencies inferred from logs, alerts, health checks, and optional Grafana metrics proxy with empirical confidence accumulation ($50\% \to 99\%$) and resilient offline fallback.
 - **Core Separation of Concerns**: *"Grafana observes. OpsPilot reasons and controls."* Grafana is strictly an optional, read-only telemetry input.
 - **96.6% Alert Noise Compression**: Compresses 29 raw cascade alerts across 8 microservices into 1 coherent root-cause incident in `< 100ms`.
@@ -310,12 +310,12 @@ python -m pytest backend/tests/ -v
 python -m pytest backend/tests/test_topology_discovery.py -v
 ```
 
-### 3. ShopFlow Simulator Tests (26 Tests)
+### 3. ShopFlow Simulator Tests
 ```bash
 python -m pytest shopflow-test/tests/ -v
 ```
 
-### 4. Combined Regression Suite (102 Tests — 100% Green)
+### 4. Combined Regression Suite
 ```bash
 python -m pytest backend/tests/ shopflow-test/tests/ -q
 ```
@@ -326,18 +326,13 @@ cd frontend
 npm run build
 ```
 
-### 6. Automated 5-Run Continuous Demo Validation Suite
-```bash
-python scratch/run_5_demo_cycles.py
-```
-
 ---
 
 ## 🔒 Safety System & Security Guarantees
 
 1. **Strict Allowlist Enforcement**: Remediation actions are matched against `config/remediation_allowlist.yaml`. Actions outside the matrix are rejected or routed to human review.
-2. **Zero Shell Execution**: OpsPilot **never invokes arbitrary shell commands** (`os.system`, `subprocess.Popen`). Remediation actions execute strictly via structured Python handlers or authenticated REST APIs.
-3. **Parameter Injection Defense**: All remediation parameters are regex-validated against command injection and path traversal patterns.
+2. **Typed Remediation Handlers**: Remediation actions use explicitly defined Python handlers and do not execute shell commands.
+3. **Validated Action Parameters**: Remediation parameters are checked against each action's configured schema before execution.
 4. **Blast-Radius Rate Limiting**: Maximum 3 automated remediation attempts per incident with a 60-second cooldown window.
 
 ---
@@ -354,11 +349,11 @@ OpsPilot is engineered to run in mission-critical, air-gapped data centers:
 
 | Issue | Potential Cause | Resolution |
 | :--- | :--- | :--- |
-| **Port 8000, 8080, or 5173 in use** | A previous instance is still running in the background. | Run `netstat -ano \| findstr :8080` and `taskkill /PID <PID> /F`, or restart the terminal. |
-| **Recovery status shows `NOT_RECOVERED`** | Chaos was not cleared before verifying recovery. | Remediation automatically calls `/api/chaos/reset`. Run `./reset_demo.sh` to clear state. |
+| **Port 8000, 8080, or 5173 in use** | Another app or an earlier OpsPilot process owns the port. | Startup leaves existing processes alone. Close the app using the port, or on Windows run `kill_ports.ps1 -Force` only if you intend to stop listeners on all three ports. |
+| **Recovery status shows `NOT_RECOVERED`** | The monitored services may still be unhealthy or firing alerts. | Restore ShopFlow health, then run `./reset_demo.sh` to reset the demo and start a fresh correlation pass. |
 | **Frontend cannot reach backend** | Backend is stopped or CORS is misconfigured. | Ensure backend is running at `http://127.0.0.1:8080` and verify `http://127.0.0.1:8080/health`. |
 | **Missing Python modules** | Dependencies not installed in active environment. | Run `pip install -r backend/requirements.txt` and `pip install -r shopflow-test/requirements.txt`. |
-| **Stale Database Records** | Old incidents lingering in SQLite. | Run `reset_demo.bat` (Windows) or `./reset_demo.sh` (macOS/Linux) to delete `opspilot.db`. |
+| **Stale Database Records** | Old incidents lingering in SQLite. | Run `reset_demo.bat` (Windows) or `./reset_demo.sh` (macOS/Linux) while the backend is running. The API clears tables safely without deleting the open database file. |
 
 ---
 

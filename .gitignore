@@ -110,3 +110,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+.agents/
+brag-output-*/
+skills-lock.json

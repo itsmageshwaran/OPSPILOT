@@ -24,8 +24,15 @@ echo   OpsPilot - Starting Complete Incident Command Center
 echo ===================================================
 echo.
 
-echo 0. Clearing any lingering processes on ports 8000, 8080, 5173...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0kill_ports.ps1"
+echo 0. Checking required ports...
+for %%P in (8000 8080 5173) do (
+  netstat -ano | findstr /R /C:":%%P .*LISTENING" >nul
+  if not errorlevel 1 (
+    echo Port %%P is already in use. Existing processes were left running.
+    echo Close the app using it or run kill_ports.ps1 -Force if you intend to stop it.
+    exit /b 1
+  )
+)
 echo.
 
 echo 1. Starting ShopFlow Microservices on port 8000...

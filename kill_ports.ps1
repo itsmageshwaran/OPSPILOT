@@ -1,11 +1,17 @@
-Write-Host "===================================================" -ForegroundColor Cyan
-Write-Host "  OpsPilot - Emergency Port Release (8000, 8080, 5173)" -ForegroundColor Yellow
-Write-Host "===================================================" -ForegroundColor Cyan
+param([switch]$Force)
+
+if (-not $Force) {
+    Write-Host "This stops the process listening on ports 8000, 8080, and 5173." -ForegroundColor Yellow
+    Write-Host "Run .\kill_ports.ps1 -Force only when you intend to stop those processes." -ForegroundColor Yellow
+    exit 2
+}
+
+Write-Host "Stopping listeners on ports 8000, 8080, and 5173 as requested..." -ForegroundColor Yellow
 
 $ports = @(8000, 8080, 5173)
 foreach ($port in $ports) {
     try {
-        $conns = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
+        $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
         if ($conns) {
             foreach ($c in $conns) {
                 $pidToKill = $c.OwningProcess
@@ -22,19 +28,4 @@ foreach ($port in $ports) {
     }
 }
 
-# Also run free_ports.py if Python is found
-$root = $PSScriptRoot
-$pyPath = "python"
-if (Test-Path "$root\.venv\Scripts\python.exe") { 
-    $pyPath = "$root\.venv\Scripts\python.exe" 
-} elseif (Test-Path "C:\Python313\python.exe") { 
-    $pyPath = "C:\Python313\python.exe" 
-}
-
-try {
-    & $pyPath "$root\scripts\free_ports.py" 2>$null
-} catch {
-    # Ignore python invocation errors since PowerShell already killed the ports
-}
-
-Write-Host "All ports (8000, 8080, 5173) are ready and clear!" -ForegroundColor Green
+Write-Host "Requested listener processes have been stopped." -ForegroundColor Green

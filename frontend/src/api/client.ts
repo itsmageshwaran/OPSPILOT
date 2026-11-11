@@ -170,16 +170,48 @@ export const apiClient = {
   },
 
   // Reset to Clean Demo State
-  async resetAll(): Promise<{ status: string }> {
+  async resetAll(): Promise<{ status: string; shopflow_reset?: "success" | "unavailable" }> {
     const res = await fetch(`${BASE_URL}/api/reset`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
     });
-    try {
-      await fetch(`http://127.0.0.1:8000/api/chaos/reset`, { method: "POST" });
-    } catch {
-      // ignore if shopflow not running
-    }
+    return handleResponse(res);
+  },
+
+  // ChatOps NLQ
+  async queryNLQ(query: string, maxRows: number = 50): Promise<{
+    query: string;
+    sql: string;
+    row_count: number;
+    columns: string[];
+    rows: Record<string, any>[];
+    execution_time_ms: number;
+    engine: string;
+    explanation?: string;
+  }> {
+    const res = await fetch(`${BASE_URL}/api/chatops/nlq`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, max_rows: maxRows }),
+    });
+    return handleResponse(res);
+  },
+
+  async queryRawSQL(sql: string, maxRows: number = 50): Promise<{
+    query: string;
+    sql: string;
+    row_count: number;
+    columns: string[];
+    rows: Record<string, any>[];
+    execution_time_ms: number;
+    engine: string;
+    explanation?: string;
+  }> {
+    const res = await fetch(`${BASE_URL}/api/chatops/query/raw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sql, max_rows: maxRows }),
+    });
     return handleResponse(res);
   },
 };

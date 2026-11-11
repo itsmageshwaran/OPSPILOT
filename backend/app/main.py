@@ -17,6 +17,7 @@ from app.api.routes import (
     correlation_router,
     incidents_router,
 )
+from app.chatops.nlq import router as chatops_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,8 +62,8 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=settings.cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -78,6 +79,7 @@ app.include_router(events_router)
 app.include_router(sync_router)
 app.include_router(correlation_router)
 app.include_router(incidents_router)
+app.include_router(chatops_router)
 
 @app.get("/")
 def root():

@@ -26,6 +26,16 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenBenchmark }) => {
   } = useOpsPilot();
 
   const isShopFlowConnected = health?.shopflow === "connected";
+  const backendStatus = health?.status === "healthy"
+    ? "HEALTHY"
+    : health
+      ? "DEGRADED"
+      : "OFFLINE";
+  const backendStatusClass = health?.status === "healthy"
+    ? "text-emerald-400"
+    : health
+      ? "text-amber-400"
+      : "text-rose-400";
 
   return (
     <header className="bg-surface-panel/95 backdrop-blur-md border-b border-surface-border sticky top-0 z-50 px-4 sm:px-6 py-2.5">
@@ -54,10 +64,10 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({ onOpenBenchmark }) => {
         <div className="flex items-center gap-2.5 bg-surface-bg/80 px-3 py-1.5 rounded-lg border border-surface-border text-xs font-mono">
           {/* Backend Health */}
           <div className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400/50"></span>
+            <span className={`w-1.5 h-1.5 rounded-full ${health?.status === "healthy" ? "bg-emerald-400" : health ? "bg-amber-400" : "bg-rose-400"}`}></span>
             <span className="text-slate-400 text-[11px]">Backend</span>
             <span className="text-slate-200 text-[11px] font-semibold">:8080</span>
-            <span className="text-emerald-400 text-[10px] font-bold">HEALTHY</span>
+            <span className={`${backendStatusClass} text-[10px] font-bold`}>{backendStatus}</span>
           </div>
 
           <span className="text-surface-border font-light">|</span>
