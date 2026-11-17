@@ -213,6 +213,61 @@ def test_websocket_authorization_success():
         assert pong["type"] == "PONG"
         assert pong["message"] == "heartbeat acknowledged"
 
+def test_websocket_subscription_authorization_denied():
+    """Unprivileged client attempting to subscribe to privileged admin channels is rejected."""
+    token = create_access_token({"sub": "viewer@opspilot.dev", "role": "customer"})
+    with client.websocket_connect(f"/ws/telemetry?token={token}") as ws:
+        _ = ws.receive_json()  # connection frame
+        ws.send_text(json.dumps({"action": "subscribe", "channel": "admin_audit_stream"}))
+        reply = ws.receive_json()
+        assert reply["type"] == "SUBSCRIPTION_DENIED"
+        assert reply["channel"] == "admin_audit_stream"
+        assert "not authorized" in reply["reason"].lower()
+
+def test_websocket_subscription_authorization_granted():
+    """Privileged admin client subscribing to admin channel is authorized and confirmed."""
+    token = create_access_token({"sub": "sre@opspilot.dev", "role": "sre_admin"})
+    with client.websocket_connect(f"/ws/telemetry?token={token}") as ws:
+        _ = ws.receive_json()
+        ws.send_text(json.dumps({"action": "subscribe", "channel": "admin_audit_stream"}))
+        reply = ws.receive_json()
+        assert reply["type"] == "SUBSCRIPTION_CONFIRMED"
+        assert "admin_audit_stream" in reply["active_subscriptions"]
+
+def test_cron_duplicate_lock_prevention():
+    """Verifies that when a distributed lock is held, duplicate scheduled execution is prevented."""
+    lock_key = "lock:cron:test_sweep_lock"
+    # Worker 1 acquires lock
+    assert redis_client.acquire_lock(lock_key, ttl=10) is True
+    # Worker 2 attempts to acquire same lock -> rejected, duplicate prevented
+    assert redis_client.acquire_lock(lock_key, ttl=10) is False
+    # Release lock
+    redis_client.release_lock(lock_key)
+    # Now can be acquired again
+    assert redis_client.acquire_lock(lock_key, ttl=10) is True
+    redis_client.release_lock(lock_key)
+
+def test_transaction_commit_success():
+    """Verifies that normal with_transaction execution commits records permanently."""
+    db = SessionLocal()
+    test_id = f"inc_commit_{uuid.uuid4().hex[:8]}"
+    try:
+        with with_transaction(db):
+            db.add(IncidentModel(
+                incident_id=test_id,
+                title="Committed Verification Incident",
+                started_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                status="INVESTIGATING"
+            ))
+        # Assert persisted
+        retrieved = db.query(IncidentModel).filter(IncidentModel.incident_id == test_id).first()
+        assert retrieved is not None
+        assert retrieved.incident_id == test_id
+    finally:
+        db.query(IncidentModel).filter(IncidentModel.incident_id == test_id).delete()
+        db.commit()
+        db.close()
+
 
 # ------------------------------------------------------------------------------
 # 6. Scheduled Cron Jobs & Duplicate Execution Test

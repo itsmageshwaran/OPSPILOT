@@ -1,12 +1,31 @@
 import asyncio
 import hashlib
 import html
+import json
 import logging
 import os
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
+
+# Ensure shopflow-test is on sys.path for shared services
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_shopflow_path = os.path.abspath(os.path.join(_current_dir, "..", "..", "shopflow-test"))
+if _shopflow_path not in sys.path:
+    sys.path.insert(0, _shopflow_path)
+
+try:
+    from services.common.redis_client import redis_client
+except Exception:
+    class DummyRedisClient:
+        def set(self, k, v, ex=None): return True
+        def get(self, k): return None
+        def delete(self, k): return True
+        def acquire_lock(self, k, ttl=30): return True
+        def release_lock(self, k): return True
+    redis_client = DummyRedisClient()
 
 from fastapi import (
     FastAPI,
@@ -67,10 +86,18 @@ async def scheduled_telemetry_sweep(interval_seconds: int = 60):
     """
     Scheduled cron job: Periodically purges stale telemetry buffers,
     verifies database connectivity, and logs health check heartbeats.
+    Uses distributed Redis locking to prevent duplicate scheduled execution across workers.
     """
     while True:
         try:
             await asyncio.sleep(interval_seconds)
+
+            # Prevent duplicate scheduled execution across multiple worker processes
+            lock_acquired = redis_client.acquire_lock("lock:cron:scheduled_telemetry_sweep", ttl=interval_seconds - 5)
+            if not lock_acquired:
+                logger.info("[CronJob] Another worker holds the distributed scheduled sweep lock. Skipping duplicate execution.")
+                continue
+
             cron_stats["runs_count"] += 1
             cron_stats["last_run_timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             cron_stats["status"] = "running_sweep"
@@ -476,7 +503,7 @@ def get_cron_status():
     }
 
 # ------------------------------------------------------------------------------
-# WebSocket Real-Time Telemetry Stream with Authorization
+# WebSocket Real-Time Telemetry Stream with Authorization & Subscriptions
 # ------------------------------------------------------------------------------
 @app.websocket("/ws/telemetry")
 async def websocket_telemetry_stream(
@@ -484,11 +511,13 @@ async def websocket_telemetry_stream(
     token: Optional[str] = Query(None)
 ):
     """
-    WebSocket Real-Time Communication with Mandatory JWT Authorization:
-    Rejects unauthorized clients with WebSocket close code 1008 (Policy Violation).
-    Authenticated clients receive live telemetry stream frames and bidirectional messaging.
+    WebSocket Real-Time Communication with Mandatory JWT Authorization & Channel Subscriptions:
+    - Rejects unauthorized clients with WebSocket close code 1008 (Policy Violation).
+    - Authenticated clients receive live telemetry stream frames and bidirectional messaging.
+    - Authorizes channel subscriptions based on user role claims (e.g. admin_audit_stream requires admin role).
     """
-    if not token or not decode_token(token):
+    claims = decode_token(token) if token else None
+    if not claims:
         await websocket.close(
             code=status.WS_1008_POLICY_VIOLATION,
             reason="Unauthorized: Valid JWT required"
@@ -496,32 +525,79 @@ async def websocket_telemetry_stream(
         return
 
     await websocket.accept()
-    logger.info("WebSocket telemetry stream established with authenticated client")
+    user_role = claims.get("role", "customer")
+    user_email = claims.get("sub", "authenticated_user")
+    logger.info(f"WebSocket telemetry stream established for '{user_email}' (role: {user_role})")
+
+    subscribed_channels = {"cluster_health"}
     try:
         await websocket.send_json({
             "type": "CONNECTION_ESTABLISHED",
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "status": "authenticated",
-            "cluster_state": "OPTIMAL"
+            "user": user_email,
+            "role": user_role,
+            "cluster_state": "OPTIMAL",
+            "active_subscriptions": list(subscribed_channels)
         })
         while True:
-            msg = await websocket.receive_text()
-            if msg.strip().lower() == "ping":
+            raw_msg = await websocket.receive_text()
+            msg_str = raw_msg.strip()
+            if msg_str.lower() == "ping":
                 await websocket.send_json({
                     "type": "PONG",
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "message": "heartbeat acknowledged"
                 })
-            else:
+                continue
+
+            try:
+                msg_json = json.loads(msg_str)
+                action = msg_json.get("action")
+                if action == "subscribe":
+                    channel = msg_json.get("channel", "cluster_health")
+                    privileged_channels = {"admin_audit_stream", "remediation_control", "security_logs"}
+                    if channel in privileged_channels and user_role not in ("admin", "sre_admin"):
+                        await websocket.send_json({
+                            "type": "SUBSCRIPTION_DENIED",
+                            "channel": channel,
+                            "reason": f"Role '{user_role}' is not authorized to subscribe to privileged channel '{channel}'",
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        })
+                    else:
+                        subscribed_channels.add(channel)
+                        await websocket.send_json({
+                            "type": "SUBSCRIPTION_CONFIRMED",
+                            "channel": channel,
+                            "active_subscriptions": sorted(list(subscribed_channels)),
+                            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        })
+                elif action == "unsubscribe":
+                    channel = msg_json.get("channel")
+                    if channel in subscribed_channels:
+                        subscribed_channels.remove(channel)
+                    await websocket.send_json({
+                        "type": "UNSUBSCRIBE_CONFIRMED",
+                        "channel": channel,
+                        "active_subscriptions": sorted(list(subscribed_channels)),
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    })
+                else:
+                    await websocket.send_json({
+                        "type": "TELEMETRY_ACK",
+                        "received_action": action,
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    })
+            except json.JSONDecodeError:
                 await websocket.send_json({
                     "type": "TELEMETRY_ACK",
-                    "received_payload": msg[:100],
+                    "received_payload": msg_str[:100],
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 })
     except (WebSocketDisconnect, asyncio.CancelledError):
-        logger.info("WebSocket telemetry stream disconnected")
+        logger.info(f"WebSocket telemetry stream disconnected for '{user_email}'")
     except Exception as e:
-        logger.warning(f"WebSocket telemetry error: {e}")
+        logger.warning(f"WebSocket telemetry error for '{user_email}': {e}")
 
 # ------------------------------------------------------------------------------
 # HTTP Auth Verification Endpoint

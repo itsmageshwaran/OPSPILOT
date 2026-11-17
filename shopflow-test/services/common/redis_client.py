@@ -73,4 +73,27 @@ class RedisClientWrapper:
         self._memory_ttls.pop(key, None)
         return True
 
+    def acquire_lock(self, key: str, ttl: int = 30) -> bool:
+        """
+        Distributed Lock Acquisition using Redis SETNX with TTL.
+        Prevents duplicate execution across multiple worker processes or cron schedulers.
+        """
+        if self._connected and self._client:
+            try:
+                return bool(self._client.set(key, "locked", nx=True, ex=ttl))
+            except Exception:
+                self._connected = False
+
+        now = time.time()
+        exp = self._memory_ttls.get(key)
+        if exp and now < exp:
+            return False
+        self._memory_cache[key] = "locked"
+        self._memory_ttls[key] = now + ttl
+        return True
+
+    def release_lock(self, key: str) -> bool:
+        """Releases the distributed lock."""
+        return self.delete(key)
+
 redis_client = RedisClientWrapper()
