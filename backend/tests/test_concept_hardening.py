@@ -374,3 +374,86 @@ def test_ssr_html_report_rendering_and_headers():
     assert "Server-Rendered HTML" in body
     assert "Impacted Services Cascade" in body
     assert "Executive Summary &amp; Root Cause Analysis" in body or "Executive Summary & Root Cause Analysis" in body
+
+
+# ------------------------------------------------------------------------------
+# 9. Stripe Standard Signature Header & OpsPilot Payment Router Test
+# ------------------------------------------------------------------------------
+def test_stripe_standard_timestamp_signature_verified():
+    """
+    Verifies official Stripe signature header format:
+    Stripe-Signature: t=1614555845,v1=5257a869e7ecebeda32affa62cd4937ad15ec0f8a80e00244b4e0ca86ee324a0
+    The signed payload is '{t}.{raw_body}'.
+    """
+    event_id = f"evt_stripe_{uuid.uuid4().hex[:10]}"
+    payload = json.dumps({
+        "id": event_id,
+        "type": "payment_intent.succeeded",
+        "data": {"object": {"id": "pi_stripe_live", "order_id": "ord_stripe_99"}}
+    }).encode("utf-8")
+
+    now_t = str(int(time.time()))
+    signed_payload = f"{now_t}.".encode("utf-8") + payload
+    v1_sig = hmac.new(PAYMENT_WEBHOOK_SECRET.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    stripe_header = f"t={now_t},v1={v1_sig}"
+
+    res = client.post(
+        "/checkout/webhook/payment",
+        content=payload,
+        headers={"Stripe-Signature": stripe_header, "Content-Type": "application/json"}
+    )
+    assert res.status_code == 200
+    assert res.json()["received"] is True
+    assert res.json()["status"] == "processed"
+
+def test_stripe_signature_tampered_timestamp_rejected():
+    """Forged timestamp in Stripe-Signature header fails cryptographic verification."""
+    payload = json.dumps({"id": "evt_stripe_bad", "type": "payment_intent.succeeded"}).encode("utf-8")
+    stripe_header = "t=9999999999,v1=0000000000000000000000000000000000000000000000000000000000000000"
+    res = client.post(
+        "/checkout/webhook/payment",
+        content=payload,
+        headers={"Stripe-Signature": stripe_header, "Content-Type": "application/json"}
+    )
+    assert res.status_code == 403
+    assert "Cryptographic signature verification failed" in res.json()["detail"]
+
+def test_opspilot_payment_intent_endpoint_reachable():
+    """Verifies that OpsPilot main API directly serves checkout payment intent generation."""
+    res = client.post(
+        "/checkout/payment-intent",
+        json={
+            "order_id": f"ord_{uuid.uuid4().hex[:6]}",
+            "amount": 49.99,
+            "currency": "usd",
+            "customer_email": "customer@shopflow.dev"
+        }
+    )
+    assert res.status_code == 201
+    data = res.json()
+    assert data["id"].startswith("pi_test_")
+    assert data["status"] == "requires_payment_method"
+    assert data["mode"] == "test"
+    assert "client_secret" in data
+
+def test_ssr_report_alias_route_reachable():
+    """Verifies that SSR executive incident report is accessible via the /reports/incidents/{id}/executive alias."""
+    incident_id = f"inc_alias_{uuid.uuid4().hex[:6]}"
+    res = client.get(f"/reports/incidents/{incident_id}/executive")
+    assert res.status_code == 200
+    assert "text/html" in res.headers["content-type"]
+    assert f"OpsPilot SSR Incident Report — {incident_id}" in res.text
+
+def test_mongo_knowledge_base_endpoints_reachable():
+    """Verifies that MongoDB knowledge base post-mortems and aggregation routes are reachable."""
+    # Aggregation endpoint
+    res_agg = client.get("/api/knowledge-base/analytics/mttr-aggregation")
+    assert res_agg.status_code == 200
+    assert "pipeline_stages" in res_agg.json()
+    assert "results" in res_agg.json()
+
+    # Index listing
+    res_idx = client.get("/api/knowledge-base/indexes")
+    assert res_idx.status_code == 200
+    assert "indexes" in res_idx.json()
+

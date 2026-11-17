@@ -332,14 +332,35 @@ async def payment_webhook(
         )
 
     raw_body = await request.body()
-    computed_sig = hmac.new(
-        PAYMENT_WEBHOOK_SECRET.encode("utf-8"),
-        raw_body,
-        hashlib.sha256
-    ).hexdigest()
+    is_valid = False
+
+    # Check for Stripe standard header format: t=<timestamp>,v1=<hmac_hex>
+    if "t=" in signature and "v1=" in signature:
+        pairs = dict(item.strip().split("=", 1) for item in signature.split(",") if "=" in item)
+        t = pairs.get("t")
+        v1 = pairs.get("v1")
+        if t and v1:
+            signed_payload = f"{t}.".encode("utf-8") + raw_body
+            expected_v1 = hmac.new(
+                PAYMENT_WEBHOOK_SECRET.encode("utf-8"),
+                signed_payload,
+                hashlib.sha256
+            ).hexdigest()
+            if hmac.compare_digest(v1.strip(), expected_v1):
+                is_valid = True
+
+    # Fallback to direct raw HMAC-SHA256 comparison
+    if not is_valid:
+        computed_sig = hmac.new(
+            PAYMENT_WEBHOOK_SECRET.encode("utf-8"),
+            raw_body,
+            hashlib.sha256
+        ).hexdigest()
+        if hmac.compare_digest(signature.strip(), computed_sig):
+            is_valid = True
 
     # Constant-time comparison to prevent timing attacks
-    if not hmac.compare_digest(signature.strip(), computed_sig):
+    if not is_valid:
         logger.error(
             "WEBHOOK_SIGNATURE_MISMATCH",
             "Cryptographic webhook signature verification failed!",

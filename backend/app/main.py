@@ -62,6 +62,7 @@ from app.api.routes import (
     incidents_router,
     knowledge_base_router,
     ai_agent_router,
+    checkout_router,
 )
 from app.chatops.nlq import router as chatops_router
 
@@ -220,6 +221,7 @@ app.include_router(incidents_router)
 app.include_router(knowledge_base_router)
 app.include_router(chatops_router)
 app.include_router(ai_agent_router)
+app.include_router(checkout_router)
 
 # ------------------------------------------------------------------------------
 # File Upload Handling: Multipart telemetry/bundle upload endpoint
@@ -294,6 +296,12 @@ async def upload_telemetry_bundle(file: UploadFile = File(...)):
     status_code=status.HTTP_200_OK,
     summary="Server-Side Rendered (SSR) HTML Incident Executive Report",
     tags=["Reports & SSR"]
+)
+@app.get(
+    "/reports/incidents/{incident_id}/executive",
+    response_class=HTMLResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False
 )
 def get_incident_ssr_report(incident_id: str, db: Session = Depends(get_db)):
     """

@@ -10,6 +10,7 @@ from .correlation import router as correlation_router
 from .incidents import router as incidents_router
 from .knowledge_base import router as knowledge_base_router
 from .ai_agent import router as ai_agent_router
+from .checkout import router as checkout_router
 
 __all__ = [
     "health_router",
@@ -24,4 +25,5 @@ __all__ = [
     "incidents_router",
     "knowledge_base_router",
     "ai_agent_router",
+    "checkout_router",
 ]
