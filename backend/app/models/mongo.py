@@ -7,6 +7,7 @@ Demonstrates:
 - Indexing for Query Performance (Compound indexes, text search)
 """
 
+import os
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
@@ -85,16 +86,39 @@ class PostMortemDocument(BaseModel):
 class MongoIncidentKnowledgeBase:
     """
     High-performance MongoDB document store and aggregation engine for OpsPilot.
-    Supports real MongoDB connections or high-fidelity in-memory document emulation
-    with full aggregation pipeline evaluation and compound indexing semantics.
+    Supports real MongoDB connections via pymongo with collection management,
+    compound indexing, and aggregation pipelines, alongside high-fidelity
+    in-memory document emulation for offline/sandboxed development environments.
     """
 
     def __init__(self, uri: Optional[str] = None, db_name: str = "opspilot"):
-        self.uri = uri
+        self.uri = uri or os.getenv("MONGO_URI", "mongodb://localhost:27017")
         self.db_name = db_name
+        self.collection_name = "post_mortems"
         self._memory_docs: Dict[str, Dict[str, Any]] = {}
         self._indexes: List[Dict[str, Any]] = []
+        self.real_client = None
+        self.real_collection = None
+        self.is_real_connected = False
+        self.connection_blocker: Optional[str] = None
+
+        self._init_client()
         self._init_indexes()
+
+    def _init_client(self):
+        """Attempts real MongoDB connection using pymongo."""
+        try:
+            import pymongo
+            client = pymongo.MongoClient(self.uri, serverSelectionTimeoutMS=1500)
+            # Ping database to verify live network connectivity
+            client.admin.command("ping")
+            self.real_client = client
+            self.real_collection = client[self.db_name][self.collection_name]
+            self.is_real_connected = True
+            self.connection_blocker = None
+        except Exception as e:
+            self.is_real_connected = False
+            self.connection_blocker = f"Real MongoDB server not reachable at {self.uri}: {str(e)}"
 
     def _init_indexes(self):
         """
@@ -102,6 +126,7 @@ class MongoIncidentKnowledgeBase:
         1. Compound index on (root_cause_service, status, created_at)
         2. Unique index on incident_id
         3. Multikey index on tags
+        4. Numeric index on mttr_minutes
         """
         self._indexes = [
             {"keys": [("incident_id", 1)], "unique": True, "name": "idx_incident_id_unique"},
@@ -109,9 +134,25 @@ class MongoIncidentKnowledgeBase:
             {"keys": [("tags", 1)], "name": "idx_multikey_tags"},
             {"keys": [("mttr_minutes", 1)], "name": "idx_mttr_numeric"}
         ]
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                import pymongo
+                self.real_collection.create_index([("incident_id", pymongo.ASCENDING)], unique=True, name="idx_incident_id_unique")
+                self.real_collection.create_index([("root_cause_service", pymongo.ASCENDING), ("status", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)], name="idx_service_status_time")
+                self.real_collection.create_index([("tags", pymongo.ASCENDING)], name="idx_multikey_tags")
+                self.real_collection.create_index([("mttr_minutes", pymongo.ASCENDING)], name="idx_mttr_numeric")
+            except Exception as e:
+                pass
 
     def list_indexes(self) -> List[Dict[str, Any]]:
         """Return registered MongoDB index definitions."""
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                raw_indexes = list(self.real_collection.list_indexes())
+                if raw_indexes:
+                    return [{"name": idx.get("name"), "keys": list(idx.get("key", {}).items())} for idx in raw_indexes]
+            except Exception:
+                pass
         return self._indexes
 
     # --- CRUD: CREATE ---
@@ -122,16 +163,45 @@ class MongoIncidentKnowledgeBase:
         data["_id"] = doc_id
         data["created_at"] = data.get("created_at") or utc_now_iso()
         data["updated_at"] = utc_now_iso()
+
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                self.real_collection.replace_one({"incident_id": doc_id}, data, upsert=True)
+            except Exception:
+                pass
+
         self._memory_docs[doc_id] = data
         return data
 
     # --- CRUD: READ ---
     def get_post_mortem(self, incident_id: str) -> Optional[Dict[str, Any]]:
         """Read a single document by incident_id index lookup."""
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                found = self.real_collection.find_one({"incident_id": incident_id})
+                if found:
+                    found["_id"] = str(found["_id"])
+                    return found
+            except Exception:
+                pass
         return self._memory_docs.get(incident_id)
 
     def find_by_service(self, service: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
         """Read documents matching indexed fields with projection."""
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                query = {"root_cause_service": service}
+                if status:
+                    query["status"] = status
+                cursor = self.real_collection.find(query).sort("created_at", -1)
+                results = []
+                for doc in cursor:
+                    doc["_id"] = str(doc["_id"])
+                    results.append(doc)
+                return results
+            except Exception:
+                pass
+
         results = []
         for doc in self._memory_docs.values():
             if doc.get("root_cause_service") == service:
@@ -142,21 +212,38 @@ class MongoIncidentKnowledgeBase:
     # --- CRUD: UPDATE ---
     def update_post_mortem(self, incident_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update existing document with $set semantics and bump updated_at."""
-        if incident_id not in self._memory_docs:
+        if incident_id not in self._memory_docs and (not self.is_real_connected or not self.real_collection.find_one({"incident_id": incident_id})):
             return None
-        doc = self._memory_docs[incident_id]
+
+        updates["updated_at"] = utc_now_iso()
+
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                self.real_collection.update_one({"incident_id": incident_id}, {"$set": updates})
+            except Exception:
+                pass
+
+        doc = self._memory_docs.get(incident_id, {})
         doc.update(updates)
-        doc["updated_at"] = utc_now_iso()
         self._memory_docs[incident_id] = doc
         return doc
 
     # --- CRUD: DELETE ---
     def delete_post_mortem(self, incident_id: str) -> bool:
         """Delete document from MongoDB collection."""
+        deleted = False
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                res = self.real_collection.delete_one({"incident_id": incident_id})
+                if res.deleted_count > 0:
+                    deleted = True
+            except Exception:
+                pass
+
         if incident_id in self._memory_docs:
             del self._memory_docs[incident_id]
-            return True
-        return False
+            deleted = True
+        return deleted
 
     # --- AGGREGATION PIPELINES ---
     def aggregate_mttr_by_service(self) -> List[Dict[str, Any]]:
@@ -175,6 +262,32 @@ class MongoIncidentKnowledgeBase:
           { "$sort": { "incident_count": -1 } }
         ]
         """
+        pipeline = [
+            {"$match": {"status": "RESOLVED"}},
+            {
+                "$group": {
+                    "_id": "$root_cause_service",
+                    "incident_count": {"$sum": 1},
+                    "avg_mttr_minutes": {"$avg": "$mttr_minutes"},
+                    "min_mttr_minutes": {"$min": "$mttr_minutes"},
+                    "max_mttr_minutes": {"$max": "$mttr_minutes"}
+                }
+            },
+            {"$sort": {"incident_count": -1}}
+        ]
+
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                raw_agg = list(self.real_collection.aggregate(pipeline))
+                if raw_agg:
+                    for item in raw_agg:
+                        item["avg_mttr_minutes"] = round(float(item.get("avg_mttr_minutes") or 0.0), 2)
+                        item["min_mttr_minutes"] = round(float(item.get("min_mttr_minutes") or 0.0), 2)
+                        item["max_mttr_minutes"] = round(float(item.get("max_mttr_minutes") or 0.0), 2)
+                    return raw_agg
+            except Exception:
+                pass
+
         groups: Dict[str, List[float]] = {}
         for doc in self._memory_docs.values():
             if doc.get("status") == "RESOLVED":
@@ -207,6 +320,26 @@ class MongoIncidentKnowledgeBase:
           { "$sort": { "count": -1 } }
         ]
         """
+        pipeline = [
+            {"$unwind": "$embedded_alerts"},
+            {
+                "$group": {
+                    "_id": "$embedded_alerts.severity",
+                    "count": {"$sum": 1},
+                    "services_impacted": {"$addToSet": "$embedded_alerts.service"}
+                }
+            },
+            {"$sort": {"count": -1}}
+        ]
+
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                raw_agg = list(self.real_collection.aggregate(pipeline))
+                if raw_agg:
+                    return raw_agg
+            except Exception:
+                pass
+
         severity_map: Dict[str, Dict[str, Any]] = {}
         for doc in self._memory_docs.values():
             for alert in doc.get("embedded_alerts", []):

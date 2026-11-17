@@ -85,6 +85,8 @@ class PaymentIntentResponse(BaseModel):
 
 # In-memory test payment ledger for idempotent intent tracking
 payment_intents: Dict[str, Dict[str, Any]] = {}
+processed_webhook_events: set = set()
+
 
 
 @app.get("/health")
@@ -319,6 +321,26 @@ async def payment_webhook(
         )
 
     event_type = event.get("type", "unknown")
+    event_id = event.get("id") or f"{event_type}_{event.get('data', {}).get('object', {}).get('id', uuid.uuid4().hex)}"
+
+    # Duplicate-Event Handling: Reject/ignore replayed or duplicate webhook deliveries
+    if event_id in processed_webhook_events:
+        logger.info(
+            "WEBHOOK_DUPLICATE_IGNORED",
+            f"Webhook event {event_id} was already processed. Ignoring duplicate delivery.",
+            metadata={"event_id": event_id, "event_type": event_type}
+        )
+        return {
+            "received": True,
+            "event_type": event_type,
+            "event_id": event_id,
+            "duplicate": True,
+            "message": "Duplicate webhook event ignored idempotently.",
+            "processed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        }
+
+    processed_webhook_events.add(event_id)
+
     event_data = event.get("data", {}).get("object", {})
     intent_id = event_data.get("id")
     order_id = event_data.get("order_id")

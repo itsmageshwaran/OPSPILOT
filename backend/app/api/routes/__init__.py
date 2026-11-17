@@ -9,6 +9,7 @@ from .sync import router as sync_router
 from .correlation import router as correlation_router
 from .incidents import router as incidents_router
 from .knowledge_base import router as knowledge_base_router
+from .ai_agent import router as ai_agent_router
 
 __all__ = [
     "health_router",
@@ -22,4 +23,5 @@ __all__ = [
     "correlation_router",
     "incidents_router",
     "knowledge_base_router",
+    "ai_agent_router",
 ]

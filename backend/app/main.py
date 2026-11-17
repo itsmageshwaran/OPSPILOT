@@ -1,30 +1,3 @@
-import logging
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-
-from app.config import settings
-from app.database.session import init_db
-from app.api.routes import (
-    health_router,
-    services_router,
-    topology_router,
-    alerts_router,
-    metrics_router,
-    logs_router,
-    events_router,
-    sync_router,
-    correlation_router,
-    incidents_router,
-)
-from app.chatops.nlq import router as chatops_router
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='{"timestamp": "%(asctime)s", "logger": "%(name)s", "level": "%(levelname)s", "message": "%(message)s"}'
-)
-logger = logging.getLogger("opspilot.main")
-
 import asyncio
 import hashlib
 import html
@@ -56,6 +29,7 @@ from app.api.routes import (
     correlation_router,
     incidents_router,
     knowledge_base_router,
+    ai_agent_router,
 )
 from app.chatops.nlq import router as chatops_router
 
@@ -63,6 +37,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='{"timestamp": "%(asctime)s", "logger": "%(name)s", "level": "%(levelname)s", "message": "%(message)s"}'
 )
+logger = logging.getLogger("opspilot.main")
 logger = logging.getLogger("opspilot.main")
 
 # ------------------------------------------------------------------------------
@@ -204,6 +179,7 @@ app.include_router(correlation_router)
 app.include_router(incidents_router)
 app.include_router(knowledge_base_router)
 app.include_router(chatops_router)
+app.include_router(ai_agent_router)
 
 # ------------------------------------------------------------------------------
 # File Upload Handling: Multipart telemetry/bundle upload endpoint

@@ -336,7 +336,7 @@ def test_payment_webhook_hmac_signature():
 # ------------------------------------------------------------------------------
 # 5. File Upload Handling & SSR Incident Report Tests
 # ------------------------------------------------------------------------------
-from app.main import get_incident_ssr_report
+from app.main import get_incident_ssr_report, trigger_cron_sweep, get_cron_status
 
 def test_ssr_incident_report():
     db = SessionLocal()
@@ -349,3 +349,134 @@ def test_ssr_incident_report():
         assert "inc_sample_ssr" in html_content
     finally:
         db.close()
+
+# ------------------------------------------------------------------------------
+# 6. Payment Webhook Duplicate-Event Handling Test
+# ------------------------------------------------------------------------------
+from services.checkout_api.main import (
+    payment_webhook,
+    processed_webhook_events
+)
+from fastapi import Request
+import asyncio
+
+def test_payment_duplicate_event_handling():
+    event_id = f"evt_dup_test_{uuid.uuid4().hex[:8]}"
+    payload_dict = {
+        "id": event_id,
+        "type": "payment_intent.succeeded",
+        "data": {
+            "object": {
+                "id": "pi_dup_test",
+                "order_id": "ord_1001"
+            }
+        }
+    }
+    raw_payload = json.dumps(payload_dict).encode("utf-8")
+    sig = hmac.new(PAYMENT_WEBHOOK_SECRET.encode("utf-8"), raw_payload, hashlib.sha256).hexdigest()
+
+    # Emulate FastAPI Request
+    class MockRequest:
+        async def body(self):
+            return raw_payload
+
+    # First delivery: processed successfully
+    mock_req = MockRequest()
+    res1 = asyncio.run(payment_webhook(request=mock_req, x_signature=sig))
+    assert res1["received"] is True
+    assert res1.get("duplicate") is not True
+
+    # Second delivery with same event_id: duplicate-event handling catches and ignores idempotently
+    res2 = asyncio.run(payment_webhook(request=mock_req, x_signature=sig))
+    assert res2["received"] is True
+    assert res2.get("duplicate") is True
+    assert "Duplicate webhook event ignored idempotently" in res2["message"]
+
+# ------------------------------------------------------------------------------
+# 7. AI Function Calling & Tool Use with Safety Gate Authorization Test
+# ------------------------------------------------------------------------------
+from app.ai_tools.agent import (
+    ai_tool_executor,
+    TOOL_DEFINITIONS,
+    ProposeRemediationArgs,
+)
+
+def test_ai_function_calling_and_safety_gate():
+    db = SessionLocal()
+    try:
+        # 1. Tool definitions exist and adhere to OpenAI/Gemini schema
+        assert len(TOOL_DEFINITIONS) >= 3
+        tool_names = [t["function"]["name"] for t in TOOL_DEFINITIONS]
+        assert "propose_remediation_action" in tool_names
+        assert "query_service_telemetry" in tool_names
+        assert "fetch_historical_incidents" in tool_names
+
+        # 2. Strict Argument Validation: Invalid action raises ValueError
+        with pytest.raises(ValueError):
+            ProposeRemediationArgs(
+                incident_id="inc_test_01",
+                action="drop_database_mutation",  # Disallowed
+                target_service="postgresql"
+            )
+
+        # 3. Role-based Authorization: Disallow unprivileged callers
+        unauth_result = ai_tool_executor.execute(
+            tool_name="propose_remediation_action",
+            arguments={
+                "incident_id": "inc_test_01",
+                "action": "restart_service",
+                "target_service": "postgresql"
+            },
+            caller_role="viewer_guest",
+            db=db
+        )
+        assert unauth_result["status"] == "unauthorized"
+
+        # 4. Valid Execution with Safety Gate: Evaluates through 10 deterministic checks
+        auth_result = ai_tool_executor.execute(
+            tool_name="propose_remediation_action",
+            arguments={
+                "incident_id": "inc_nonexistent_test",
+                "action": "restart_service",
+                "target_service": "postgresql"
+            },
+            caller_role="sre_admin",
+            db=db
+        )
+        # Incident doesn't exist -> Safety Gate condition 1 correctly rejects
+        assert auth_result["status"] == "success"
+        assert auth_result["safety_decision"] == "REJECTED"
+        assert "not found" in auth_result["reason"].lower()
+
+    finally:
+        db.close()
+
+# ------------------------------------------------------------------------------
+# 8. Redis Caching Tier & Scheduled Cron Jobs Test
+# ------------------------------------------------------------------------------
+from services.common.redis_client import redis_client
+
+def test_redis_caching_and_fallback():
+    key = f"test_cart_cache_{uuid.uuid4().hex[:6]}"
+    test_val = json.dumps({"session_id": key, "items": [{"product_id": "prod_01", "qty": 2}]})
+    
+    # Set and Get
+    redis_client.set(key, test_val, ex=60)
+    retrieved = redis_client.get(key)
+    assert retrieved == test_val
+
+    # Delete
+    redis_client.delete(key)
+    assert redis_client.get(key) is None
+
+def test_scheduled_cron_job():
+    # Trigger manual cron sweep
+    res = asyncio.run(trigger_cron_sweep())
+    assert res["status"] == "success"
+    assert res["cron_stats"]["runs_count"] > 0
+
+    # Get cron status
+    status_res = get_cron_status()
+    assert status_res["is_active"] is True
+    assert status_res["job_name"] == "scheduled_telemetry_sweep"
+

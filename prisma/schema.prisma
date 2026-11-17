@@ -1,0 +1,207 @@
+// ==============================================================================
+// Prisma ORM Schema Specification for OpsPilot & ShopFlow
+// Defines relational database models, 1NF/2NF/3NF relations, compound indexes,
+// and referential integrity constraints for PostgreSQL / SQLite.
+// ==============================================================================
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Severity {
+  CRITICAL
+  WARNING
+  INFO
+}
+
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  MITIGATED
+  RESOLVED
+}
+
+enum RemediationDecision {
+  APPROVED
+  REJECTED
+  HUMAN_REVIEW
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  fullName     String    @map("full_name")
+  role         String    @default("customer")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  orders       Order[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model Product {
+  id          String      @id @default(uuid())
+  title       String
+  description String
+  category    String
+  price       Decimal     @db.Decimal(10, 2)
+  rating      Decimal     @default(4.5) @db.Decimal(3, 2)
+  reviewCount Int         @default(0) @map("review_count")
+  stock       Int         @default(50)
+  imageUrl    String      @map("image_url")
+  badge       String?
+  specs       Json?       @default("{}")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  orderItems  OrderItem[]
+
+  @@index([category])
+  @@index([title])
+  @@map("products")
+}
+
+model Order {
+  id              String      @id @default(uuid())
+  userId          String      @map("user_id")
+  userEmail       String      @map("user_email")
+  status          String      @default("CONFIRMED")
+  subtotal        Decimal     @db.Decimal(10, 2)
+  tax             Decimal     @db.Decimal(10, 2)
+  shipping        Decimal     @db.Decimal(10, 2)
+  total           Decimal     @db.Decimal(10, 2)
+  shippingAddress Json        @map("shipping_address")
+  paymentMethod   String      @default("Credit Card (Simulated)") @map("payment_method")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items           OrderItem[]
+
+  @@index([userId])
+  @@index([userEmail])
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id           String   @id @default(uuid())
+  orderId      String   @map("order_id")
+  productId    String   @map("product_id")
+  productTitle String   @map("product_title")
+  price        Decimal  @db.Decimal(10, 2)
+  quantity     Int      @default(1)
+  createdAt    DateTime @default(now()) @map("created_at")
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product      Product  @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+model Service {
+  id           Int          @id @default(autoincrement())
+  serviceId    String       @unique @map("service_id")
+  name         String
+  type         String
+  status       String       @default("Operational")
+  metadataJson Json?        @default("{}") @map("metadata_json")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+  alerts       Alert[]
+  dependencies Dependency[] @relation("SourceDependencies")
+  dependents   Dependency[] @relation("TargetDependencies")
+
+  @@index([serviceId])
+  @@index([status])
+  @@map("services")
+}
+
+model Dependency {
+  id            Int      @id @default(autoincrement())
+  source        String
+  target        String
+  relationship  String   @default("calls")
+  metadataJson  Json?    @default("{}") @map("metadata_json")
+  createdAt     DateTime @default(now()) @map("created_at")
+  sourceService Service  @relation("SourceDependencies", fields: [source], references: [serviceId], onDelete: Cascade)
+  targetService Service  @relation("TargetDependencies", fields: [target], references: [serviceId], onDelete: Cascade)
+
+  @@unique([source, target], name: "uq_dependency_source_target")
+  @@index([source])
+  @@index([target])
+  @@map("dependencies")
+}
+
+model Alert {
+  id             Int       @id @default(autoincrement())
+  alertId        String    @unique @map("alert_id")
+  timestamp      String
+  service        String
+  severity       Severity  @default(INFO)
+  alertType      String    @map("alert_type")
+  metric         String
+  metricValue    Float     @map("metric_value")
+  threshold      Float
+  message        String
+  source         String    @default("shopflow-telemetry-agent")
+  dependency     String?
+  tagsJson       Json?     @default("{}") @map("tags_json")
+  rawPayloadJson Json?     @default("{}") @map("raw_payload_json")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  serviceEntity  Service   @relation(fields: [service], references: [serviceId], onDelete: Cascade)
+
+  @@index([service, timestamp])
+  @@index([severity, createdAt])
+  @@map("alerts")
+}
+
+model Incident {
+  id                   Int            @id @default(autoincrement())
+  incidentId           String         @unique @map("incident_id")
+  title                String
+  severity             Severity       @default(CRITICAL)
+  status               IncidentStatus @default(OPEN)
+  startedAt            String         @map("started_at")
+  updatedAt            String?        @map("updated_at")
+  resolvedAt           String?        @map("resolved_at")
+  alertCount           Int            @default(0) @map("alert_count")
+  alertIdsJson         Json?          @default("[]") @map("alert_ids_json")
+  affectedServicesJson Json?          @default("[]") @map("affected_services_json")
+  correlationScore     Float          @default(1.0) @map("correlation_score")
+  correlationMethod    String         @default("dependency_aware") @map("correlation_method")
+  evidenceJson         Json?          @default("{}") @map("evidence_json")
+  diagnosisJson        Json?          @default("{}") @map("diagnosis_json")
+  rootCauseService     String?        @map("root_cause_service")
+  summary              String?
+  createdAt            DateTime       @default(now()) @map("created_at")
+
+  @@index([status, severity])
+  @@index([startedAt])
+  @@map("incidents")
+}
+
+model RemediationAudit {
+  id                  Int                 @id @default(autoincrement())
+  auditId             String              @unique @map("audit_id")
+  incidentId          String              @map("incident_id")
+  timestamp           String
+  rootCauseService    String?             @map("root_cause_service")
+  confidence          Float               @default(0.0)
+  action              String
+  targetService       String              @map("target_service")
+  decision            RemediationDecision
+  reason              String
+  executionMode       String              @default("SIMULATION") @map("execution_mode")
+  executionStatus     String              @default("PENDING") @map("execution_status")
+  recoveryStatus      String              @default("UNKNOWN") @map("recovery_status")
+  actor               String              @default("opspilot-remediation-engine")
+  allowlistPolicyJson Json?               @default("{}") @map("allowlist_policy_json")
+  detailsJson         Json?               @default("{}") @map("details_json")
+  createdAt           DateTime            @default(now()) @map("created_at")
+
+  @@index([incidentId, decision])
+  @@map("remediation_audits")
+}
