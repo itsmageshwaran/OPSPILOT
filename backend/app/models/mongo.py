@@ -59,7 +59,7 @@ class PostMortemDocument(BaseModel):
     state, enabling independent updates, multi-tenant partitioning, and lifecycle segregation.
     """
     id: Optional[str] = Field(default=None, alias="_id")
-    incident_id: str = Field(..., index=True)
+    incident_id: str = Field(...)
     title: str
     summary: str
     root_cause_service: str  # Referenced service_id in services collection/table
