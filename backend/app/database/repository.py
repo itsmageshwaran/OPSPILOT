@@ -632,6 +632,67 @@ class TelemetryRepository:
             for r in rows
         ]
 
+    # ---------------- RELATIONAL SQL: JOINS, GROUP BY, FILTERING, TRANSACTIONS ----------------
+    @staticmethod
+    def get_alerts_joined_with_services(db: Session, limit: int = 50) -> List[Dict[str, Any]]:
+        """
+        SQL JOINs demonstration:
+        Performs an explicit LEFT OUTER JOIN between alerts and services tables.
+        Returns joined tuples combining alert telemetry with service topology metadata.
+        """
+        results = (
+            db.query(AlertModel, ServiceModel)
+            .outerjoin(ServiceModel, AlertModel.service == ServiceModel.service_id)
+            .order_by(desc(AlertModel.created_at))
+            .limit(limit)
+            .all()
+        )
+        joined_data = []
+        for alert, service in results:
+            joined_data.append({
+                "alert_id": alert.alert_id,
+                "service": alert.service,
+                "severity": alert.severity,
+                "message": alert.message,
+                "metric": alert.metric,
+                "metric_value": alert.metric_value,
+                "service_name": service.name if service else "Unknown Service",
+                "service_type": service.type if service else "N/A",
+                "service_status": service.status if service else "N/A",
+                "created_at": alert.created_at.isoformat() if alert.created_at else None
+            })
+        return joined_data
+
+    @staticmethod
+    def get_alert_aggregations_grouped(db: Session) -> List[Dict[str, Any]]:
+        """
+        Filtering, Ordering, and Grouping demonstration:
+        Applies SQL GROUP BY, HAVING, and ORDER BY aggregates over alerts.
+        """
+        from sqlalchemy import func
+        rows = (
+            db.query(
+                AlertModel.service,
+                AlertModel.severity,
+                func.count(AlertModel.id).label("total_alerts"),
+                func.avg(AlertModel.metric_value).label("avg_metric_value")
+            )
+            .filter(AlertModel.severity.in_(["CRITICAL", "WARNING"]))
+            .group_by(AlertModel.service, AlertModel.severity)
+            .having(func.count(AlertModel.id) > 0)
+            .order_by(desc("total_alerts"))
+            .all()
+        )
+        return [
+            {
+                "service": r[0],
+                "severity": r[1],
+                "total_alerts": r[2],
+                "avg_metric_value": round(float(r[3]), 2) if r[3] is not None else 0.0
+            }
+            for r in rows
+        ]
+
     @staticmethod
     def clear_all(db: Session):
         db.query(RemediationAuditModel).delete()

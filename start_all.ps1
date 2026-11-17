@@ -18,12 +18,12 @@ foreach ($p in $extraPaths) {
     }
 }
 
-# 2. Resolve Python binary
+# 2. Resolve Python binary (Prefer stable Python 3.13)
 $pythonExe = "python"
-if (Test-Path "$root\.venv\Scripts\python.exe") {
-    $pythonExe = "$root\.venv\Scripts\python.exe"
-} elseif (Test-Path "C:\Python313\python.exe") {
+if (Test-Path "C:\Python313\python.exe") {
     $pythonExe = "C:\Python313\python.exe"
+} elseif (Test-Path "$root\.venv\Scripts\python.exe") {
+    $pythonExe = "$root\.venv\Scripts\python.exe"
 }
 
 # 3. Resolve NPM binary

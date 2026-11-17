@@ -173,21 +173,21 @@ INITIAL_USERS = [
     {
         "id": "usr_alex_01",
         "email": "alex@shopflow.dev",
-        "password_hash": "$2b$12$e9Qq0.v3pQW8lG5pA/3X5eQoGj.n.sD5Xh4Kk6Yn.oJ8l.xM.3C2e",
+        "password_hash": "$2b$12$evnf4ZwXDec.9Pa97Jhzh.r0eHjguAb7qjOzQmESkiDc.vW.zTlVC",
         "full_name": "Alex Rivera",
         "role": "customer"
     },
     {
         "id": "usr_sarah_02",
         "email": "sarah@shopflow.dev",
-        "password_hash": "$2b$12$e9Qq0.v3pQW8lG5pA/3X5eQoGj.n.sD5Xh4Kk6Yn.oJ8l.xM.3C2e",
+        "password_hash": "$2b$12$evnf4ZwXDec.9Pa97Jhzh.r0eHjguAb7qjOzQmESkiDc.vW.zTlVC",
         "full_name": "Sarah Chen",
         "role": "customer"
     },
     {
         "id": "usr_admin_03",
         "email": "ops@shopflow.dev",
-        "password_hash": "$2b$12$e9Qq0.v3pQW8lG5pA/3X5eQoGj.n.sD5Xh4Kk6Yn.oJ8l.xM.3C2e",
+        "password_hash": "$2b$12$evnf4ZwXDec.9Pa97Jhzh.r0eHjguAb7qjOzQmESkiDc.vW.zTlVC",
         "full_name": "DevOps Lead",
         "role": "admin"
     }

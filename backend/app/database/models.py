@@ -1,10 +1,45 @@
 import json
 from datetime import datetime, timezone
+from contextlib import contextmanager
 from sqlalchemy import Column, Integer, String, Float, Text, JSON, DateTime, Index
 from .session import Base
 
+# ==============================================================================
+# Relational Normalization Architecture (1NF, 2NF, 3NF):
+#
+# 1. First Normal Form (1NF):
+#    - All column values are atomic (indivisible scalars: strings, floats, ints).
+#    - Unique primary keys (id, service_id, alert_id) identify every tuple.
+#    - No repeating attribute groups.
+#
+# 2. Second Normal Form (2NF):
+#    - Satisfies 1NF.
+#    - All non-key attributes are fully functionally dependent on the complete primary key,
+#      avoiding partial key dependencies on composite keys (e.g. dependencies table).
+#
+# 3. Third Normal Form (3NF):
+#    - Satisfies 2NF.
+#    - No transitive functional dependencies: non-key attributes depend ONLY on the primary key,
+#      not on another non-key attribute (e.g. services, dependencies, alerts, and incidents
+#      are decomposed into separate normalized relations rather than a single denormalized table).
+# ==============================================================================
+
 def current_time():
     return datetime.now(timezone.utc)
+
+@contextmanager
+def with_transaction(db_session):
+    """
+    ACID Transaction Context Manager:
+    Guarantees Atomicity, Consistency, Isolation, and Durability.
+    Automatically commits on success; executes rollback on any exception.
+    """
+    try:
+        yield db_session
+        db_session.commit()
+    except Exception as e:
+        db_session.rollback()
+        raise e
 
 class ServiceModel(Base):
     __tablename__ = "services"
@@ -50,6 +85,11 @@ class AlertModel(Base):
     raw_payload_json = Column(JSON, default=dict)
     created_at = Column(DateTime, default=current_time)
 
+    __table_args__ = (
+        Index("ix_alerts_service_timestamp", "service", "timestamp"),
+        Index("ix_alerts_severity_created", "severity", "created_at"),
+    )
+
 class MetricModel(Base):
     __tablename__ = "metrics"
 
@@ -62,6 +102,10 @@ class MetricModel(Base):
     tags_json = Column(JSON, default=dict)
     raw_payload_json = Column(JSON, default=dict)
     created_at = Column(DateTime, default=current_time)
+
+    __table_args__ = (
+        Index("ix_metrics_service_name_time", "service", "metric_name", "timestamp"),
+    )
 
 class LogModel(Base):
     __tablename__ = "logs"
@@ -80,6 +124,10 @@ class LogModel(Base):
     metadata_json = Column(JSON, default=dict)
     raw_payload_json = Column(JSON, default=dict)
     created_at = Column(DateTime, default=current_time)
+
+    __table_args__ = (
+        Index("ix_logs_service_level_time", "service", "level", "timestamp"),
+    )
 
 class EventModel(Base):
     __tablename__ = "events"
@@ -117,6 +165,11 @@ class IncidentModel(Base):
     summary = Column(Text, nullable=True)
     created_at = Column(DateTime, default=current_time)
 
+    __table_args__ = (
+        Index("ix_incidents_status_severity", "status", "severity"),
+        Index("ix_incidents_started_at", "started_at"),
+    )
+
 class RemediationAuditModel(Base):
     """Phase 5: Safety-Gated Remediation, Recovery & Immutable Audit Trail"""
     __tablename__ = "remediation_audits"
@@ -138,3 +191,8 @@ class RemediationAuditModel(Base):
     allowlist_policy_json = Column(JSON, default=dict)
     details_json = Column(JSON, default=dict)
     created_at = Column(DateTime, default=current_time)
+
+    __table_args__ = (
+        Index("ix_remediation_incident_decision", "incident_id", "decision"),
+    )
+

@@ -5,12 +5,12 @@ cd /d "%~dp0"
 REM 1. Augment PATH with common Python and Node.js installation paths
 set "PATH=%~dp0.venv\Scripts;C:\Python313;C:\Python312;C:\Python311;C:\Program Files\nodejs;%LOCALAPPDATA%\Programs\Python\Python313;%LOCALAPPDATA%\Programs\Python\Python312;%LOCALAPPDATA%\Programs\Python\Python311;%PATH%"
 
-REM 2. Detect exact Python executable
+REM 2. Detect exact Python executable (Prefer stable Python 3.13)
 set "PYTHON_EXE=python"
-if exist "%~dp0.venv\Scripts\python.exe" (
-    set "PYTHON_EXE=%~dp0.venv\Scripts\python.exe"
-) else if exist "C:\Python313\python.exe" (
+if exist "C:\Python313\python.exe" (
     set "PYTHON_EXE=C:\Python313\python.exe"
+) else if exist "%~dp0.venv\Scripts\python.exe" (
+    set "PYTHON_EXE=%~dp0.venv\Scripts\python.exe"
 )
 
 REM 3. Detect exact NPM executable

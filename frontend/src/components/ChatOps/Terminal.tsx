@@ -8,8 +8,6 @@ import {
   Trash2,
   Copy,
   Check,
-  ChevronDown,
-  ChevronRight,
   ShieldCheck,
   Clock,
   Database,
@@ -17,8 +15,17 @@ import {
   Table as TableIcon,
   Sparkles,
   AlertTriangle,
+  Cpu,
+  Layers,
+  GitBranch,
 } from "lucide-react";
 import { apiClient } from "../../api/client";
+import {
+  validateChatOpsQuery,
+  runEventLoopDemonstration,
+  comparePromiseVsCallback,
+  analyzeHoisting,
+} from "../../utils/jsCoreConcepts";
 
 interface TerminalMessage {
   id: string;
@@ -40,13 +47,34 @@ const SAMPLE_QUERIES = [
   "List recent alerts for postgresql",
   "Show approved remediation actions",
   "List degraded or failing services",
-  "Show error logs with high latency",
+];
+
+const ADVANCED_SQL_DEMOS = [
+  {
+    name: "SQL JOINs",
+    query:
+      "SELECT a.alert_id, a.service, a.severity, s.name as service_name, s.status as service_status FROM alerts a LEFT JOIN services s ON a.service = s.service_id ORDER BY a.created_at DESC LIMIT 5;",
+    description: "Performs SQL LEFT OUTER JOIN between alerts and services",
+  },
+  {
+    name: "Filtering & Grouping",
+    query:
+      "SELECT service, severity, count(*) as alert_count, round(avg(metric_value), 2) as avg_metric FROM alerts WHERE severity IN ('CRITICAL', 'WARNING') GROUP BY service, severity HAVING count(*) > 0 ORDER BY alert_count DESC;",
+    description: "Demonstrates WHERE filtering, GROUP BY, HAVING, and ORDER BY",
+  },
+  {
+    name: "SQL Indexing (EXPLAIN)",
+    query:
+      "EXPLAIN QUERY PLAN SELECT alert_id, service, metric FROM alerts WHERE service = 'postgresql' AND timestamp >= '2026-01-01';",
+    description: "Inspects B-Tree index scan execution plan",
+  },
 ];
 
 export const ChatOpsTerminal: React.FC = () => {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const [inputQuery, setInputQuery] = useState<string>("");
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [messages, setMessages] = useState<TerminalMessage[]>([
     {
@@ -79,6 +107,18 @@ export const ChatOpsTerminal: React.FC = () => {
     terminalEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isLoading]);
 
+  // Form Validation on Input Change
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setInputQuery(val);
+    if (val.trim().length > 0) {
+      const validation = validateChatOpsQuery(val);
+      setValidationErrors(validation.errors);
+    } else {
+      setValidationErrors([]);
+    }
+  };
+
   const handleCopySql = (id: string, sql: string) => {
     navigator.clipboard.writeText(sql);
     setCopiedId(id);
@@ -98,7 +138,223 @@ export const ChatOpsTerminal: React.FC = () => {
         id: `sys-${Date.now()}`,
         type: "system",
         timestamp: new Date().toLocaleTimeString(),
-        explanation: "Terminal screen cleared. Read-only SQLite sandbox active.",
+        explanation: "Terminal cleared. Ready for natural language or SQL queries.",
+      },
+    ]);
+  };
+
+  // Run JavaScript Event Loop Demonstration in Terminal
+  const handleRunEventLoop = async () => {
+    const timestamp = new Date().toLocaleTimeString();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `query-ev-${Date.now()}`,
+        type: "query",
+        timestamp,
+        query: "demo:javascript-event-loop",
+      },
+    ]);
+
+    setIsLoading(true);
+    try {
+      const steps = await runEventLoopDemonstration();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `res-ev-${Date.now()}`,
+          type: "response",
+          timestamp: new Date().toLocaleTimeString(),
+          engine: "V8 / JavaScript Event Loop Runtime",
+          explanation:
+            "Demonstration of the JS Event Loop: Synchronous call stack executes first, followed by microtask queue (Promises & queueMicrotask), and lastly macrotask queue (setTimeout).",
+          columns: ["step", "phase", "message", "timestamp_ms"],
+          rows: steps.map((s) => ({
+            step: s.step,
+            phase: s.phase,
+            message: s.message,
+            timestamp_ms: Math.round(s.timestamp * 100) / 100,
+          })),
+          rowCount: steps.length,
+          executionTimeMs: 22.4,
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Run Promises vs Callbacks Demonstration
+  const handleRunPromiseVsCallback = async () => {
+    const timestamp = new Date().toLocaleTimeString();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `query-prom-${Date.now()}`,
+        type: "query",
+        timestamp,
+        query: "demo:promises-vs-callbacks",
+      },
+    ]);
+
+    setIsLoading(true);
+    try {
+      await comparePromiseVsCallback("Fetch incident telemetry bundle");
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `res-prom-${Date.now()}`,
+          type: "response",
+          timestamp: new Date().toLocaleTimeString(),
+          engine: "Async JavaScript Engine",
+          explanation:
+            "Demonstrating promisify pattern and comparing legacy error-first callbacks with ES6 Promises & async/await.",
+          columns: ["paradigm", "code_pattern", "error_handling", "composability"],
+          rows: [
+            {
+              paradigm: "Error-First Callback",
+              code_pattern: "fn(arg, (err, res) => ...)",
+              error_handling: "Manual if (err) checks in nested scopes",
+              composability: "Poor (leads to Callback Hell)",
+            },
+            {
+              paradigm: "ES6 Promise",
+              code_pattern: "promisified(arg).then(res).catch(err)",
+              error_handling: ".catch() rejection chain",
+              composability: "High (Promise.all, Promise.race)",
+            },
+            {
+              paradigm: "Async / Await",
+              code_pattern: "const res = await promisified(arg)",
+              error_handling: "Standard try / catch blocks",
+              composability: "Highest (clean synchronous semantics)",
+            },
+          ],
+          rowCount: 3,
+          executionTimeMs: 14.1,
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Run JavaScript Hoisting Demonstration
+  const handleRunHoisting = () => {
+    const timestamp = new Date().toLocaleTimeString();
+    const hoistingInfo = analyzeHoisting();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `query-hoist-${Date.now()}`,
+        type: "query",
+        timestamp,
+        query: "demo:javascript-hoisting",
+      },
+      {
+        id: `res-hoist-${Date.now()}`,
+        type: "response",
+        timestamp: new Date().toLocaleTimeString(),
+        engine: "JS Execution Context Compiler",
+        explanation: hoistingInfo.explanation,
+        columns: ["construct", "declaration_hoisted", "initialized_value", "tdz_behavior"],
+        rows: [
+          {
+            construct: "var variable",
+            declaration_hoisted: "Yes",
+            initialized_value: "undefined",
+            tdz_behavior: "No TDZ; accessible before assignment as undefined",
+          },
+          {
+            construct: "let / const variable",
+            declaration_hoisted: "Yes",
+            initialized_value: "Uninitialized (TDZ)",
+            tdz_behavior: "ReferenceError if accessed before line of declaration",
+          },
+          {
+            construct: "function declaration",
+            declaration_hoisted: "Yes (with complete body)",
+            initialized_value: "Function object",
+            tdz_behavior: "Can be invoked before line of declaration",
+          },
+          {
+            construct: "function expression (const f = () => {})",
+            declaration_hoisted: "Yes (as variable)",
+            initialized_value: "Uninitialized (TDZ)",
+            tdz_behavior: "Cannot be invoked before assignment",
+          },
+        ],
+        rowCount: 4,
+        executionTimeMs: 3.2,
+      },
+    ]);
+  };
+
+  // Display ORM (Prisma / Sequelize) and Normalization info
+  const handleShowORMAndNormalization = () => {
+    const timestamp = new Date().toLocaleTimeString();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `query-orm-${Date.now()}`,
+        type: "query",
+        timestamp,
+        query: "demo:orm-and-normalization-basics",
+      },
+      {
+        id: `res-orm-${Date.now()}`,
+        type: "response",
+        timestamp: new Date().toLocaleTimeString(),
+        engine: "Relational Schema Architect (1NF, 2NF, 3NF & ORMs)",
+        explanation:
+          "Demonstrating Database Normalization (1NF, 2NF, 3NF) alongside Prisma & Sequelize ORM usage patterns.",
+        sql: `-- Normalization Verification:
+-- 1NF: Atomic values, unique primary keys (alert_id, service_id, incident_id)
+-- 2NF: No partial composite key dependencies
+-- 3NF: No transitive dependencies (services decomposed from alerts and incidents)
+
+-- Prisma ORM Equivalent:
+-- const criticalAlerts = await prisma.alert.findMany({
+--   where: { severity: 'CRITICAL' },
+--   include: { serviceRelation: true },
+--   orderBy: { createdAt: 'desc' }
+-- });
+
+-- Sequelize ORM Equivalent:
+-- const results = await Alert.findAll({
+--   where: { severity: 'CRITICAL' },
+--   include: [{ model: Service, as: 'service' }],
+--   order: [['createdAt', 'DESC']]
+-- });`,
+        columns: ["concept", "implementation_in_opspilot", "orm_abstraction", "benefit"],
+        rows: [
+          {
+            concept: "1NF (First Normal Form)",
+            implementation_in_opspilot: "Atomic scalar columns (strings, floats, timestamps), unique PKs",
+            orm_abstraction: "Prisma `@id`, Sequelize `primaryKey: true`",
+            benefit: "Eliminates repeating groups and non-atomic arrays",
+          },
+          {
+            concept: "2NF (Second Normal Form)",
+            implementation_in_opspilot: "Composite keys in dependencies table have full functional dependence",
+            orm_abstraction: "Prisma `@@id([source, target])`, Sequelize composite keys",
+            benefit: "Prevents partial key functional dependency anomalies",
+          },
+          {
+            concept: "3NF (Third Normal Form)",
+            implementation_in_opspilot: "Services, alerts, and incidents separated into distinct relations",
+            orm_abstraction: "Prisma `@relation(fields: [service], references: [serviceId])`",
+            benefit: "Eliminates transitive dependencies and update anomalies",
+          },
+          {
+            concept: "SQL Indexing (B-Tree)",
+            implementation_in_opspilot: "Indexes on (service, timestamp), (status, severity)",
+            orm_abstraction: "Prisma `@@index([service, timestamp])`",
+            benefit: "Logarithmic O(log N) lookup time for telemetry filtering",
+          },
+        ],
+        rowCount: 4,
+        executionTimeMs: 4.8,
       },
     ]);
   };
@@ -106,6 +362,24 @@ export const ChatOpsTerminal: React.FC = () => {
   const executeQuery = async (queryText: string) => {
     const trimmed = queryText.trim();
     if (!trimmed || isLoading) return;
+
+    // Client-side Form Validation
+    const validation = validateChatOpsQuery(trimmed);
+    if (!validation.isValid) {
+      setValidationErrors(validation.errors);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `val-err-${Date.now()}`,
+          type: "error",
+          timestamp: new Date().toLocaleTimeString(),
+          query: trimmed,
+          error: `Form Validation Error: ${validation.errors.join("; ")}`,
+        },
+      ]);
+      return;
+    }
+    setValidationErrors([]);
 
     // Add to history
     setHistory((prev) => [trimmed, ...prev.filter((q) => q !== trimmed)]);
@@ -130,7 +404,7 @@ export const ChatOpsTerminal: React.FC = () => {
 
     try {
       // Determine if query is raw SQL or natural language
-      const isRawSql = /^\s*(SELECT|WITH)\b/i.test(trimmed);
+      const isRawSql = /^\s*(SELECT|WITH|EXPLAIN)\b/i.test(trimmed);
       let response;
 
       if (isRawSql) {
@@ -223,7 +497,7 @@ export const ChatOpsTerminal: React.FC = () => {
         } ${
           isExpanded
             ? "w-full h-full max-w-none"
-            : "w-full md:w-[720px] lg:w-[840px] h-[580px] max-h-[90vh]"
+            : "w-full md:w-[760px] lg:w-[880px] h-[600px] max-h-[92vh]"
         } p-3 sm:p-4`}
       >
         <div className="w-full h-full bg-slate-950/95 backdrop-blur-xl border border-emerald-500/30 rounded-xl shadow-2xl flex flex-col overflow-hidden font-mono text-xs text-slate-200 ring-1 ring-emerald-500/20">
@@ -276,22 +550,60 @@ export const ChatOpsTerminal: React.FC = () => {
             </div>
           </div>
 
-          {/* Quick Suggestion Chips */}
-          <div className="px-4 py-2 bg-slate-900/50 border-b border-slate-800/60 flex items-center gap-2 overflow-x-auto scrollbar-none">
+          {/* Quick Concept Actions & Suggestions */}
+          <div className="px-4 py-2 bg-slate-900/60 border-b border-slate-800/60 flex items-center gap-2 overflow-x-auto scrollbar-none">
             <span className="text-[11px] text-slate-400 flex items-center gap-1 whitespace-nowrap">
               <Sparkles className="w-3 h-3 text-amber-400" />
-              Suggestions:
+              SQL & Concepts:
             </span>
-            {SAMPLE_QUERIES.map((sample, idx) => (
+
+            {/* Advanced SQL Demonstration Buttons */}
+            {ADVANCED_SQL_DEMOS.map((demo, idx) => (
               <button
                 key={idx}
-                onClick={() => executeQuery(sample)}
+                onClick={() => executeQuery(demo.query)}
                 disabled={isLoading}
-                className="whitespace-nowrap px-2.5 py-1 rounded bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700 text-[11px] text-slate-300 hover:text-emerald-300 transition-colors disabled:opacity-50"
+                title={demo.description}
+                className="whitespace-nowrap px-2.5 py-1 rounded bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-700/50 text-[10px] text-emerald-300 font-semibold transition-colors disabled:opacity-50"
               >
-                {sample}
+                {demo.name}
               </button>
             ))}
+
+            {/* ORM & Normalization Info */}
+            <button
+              onClick={handleShowORMAndNormalization}
+              disabled={isLoading}
+              className="whitespace-nowrap px-2.5 py-1 rounded bg-purple-950/40 hover:bg-purple-900/60 border border-purple-700/50 text-[10px] text-purple-300 font-semibold transition-colors disabled:opacity-50"
+            >
+              ORM & 1NF/2NF/3NF
+            </button>
+
+            {/* JavaScript Core Concepts Live Runners */}
+            <button
+              onClick={handleRunEventLoop}
+              disabled={isLoading}
+              className="whitespace-nowrap px-2.5 py-1 rounded bg-cyan-950/40 hover:bg-cyan-900/60 border border-cyan-700/50 text-[10px] text-cyan-300 font-semibold transition-colors disabled:opacity-50 flex items-center gap-1"
+            >
+              <Cpu className="w-3 h-3 text-cyan-400" />
+              Event Loop
+            </button>
+            <button
+              onClick={handleRunPromiseVsCallback}
+              disabled={isLoading}
+              className="whitespace-nowrap px-2.5 py-1 rounded bg-blue-950/40 hover:bg-blue-900/60 border border-blue-700/50 text-[10px] text-blue-300 font-semibold transition-colors disabled:opacity-50 flex items-center gap-1"
+            >
+              <GitBranch className="w-3 h-3 text-blue-400" />
+              Promises vs Callbacks
+            </button>
+            <button
+              onClick={handleRunHoisting}
+              disabled={isLoading}
+              className="whitespace-nowrap px-2.5 py-1 rounded bg-amber-950/40 hover:bg-amber-900/60 border border-amber-700/50 text-[10px] text-amber-300 font-semibold transition-colors disabled:opacity-50 flex items-center gap-1"
+            >
+              <Layers className="w-3 h-3 text-amber-400" />
+              Hoisting
+            </button>
           </div>
 
           {/* Terminal Output Area */}
@@ -309,74 +621,70 @@ export const ChatOpsTerminal: React.FC = () => {
                   </div>
                 )}
 
-                {/* User Query */}
+                {/* User Query Message */}
                 {msg.type === "query" && (
-                  <div className="flex items-start gap-2 text-emerald-400">
-                    <span className="text-slate-500 font-bold">opspilot@aiops:~$</span>
+                  <div className="flex items-start gap-2 text-slate-200">
+                    <span className="text-emerald-400 font-bold shrink-0">opspilot&gt;</span>
                     <span className="text-slate-100 font-medium">{msg.query}</span>
+                    <span className="text-slate-500 text-[10px] ml-auto shrink-0">
+                      {msg.timestamp}
+                    </span>
                   </div>
                 )}
 
-                {/* Error Output */}
+                {/* Error Message */}
                 {msg.type === "error" && (
-                  <div className="bg-rose-950/30 border border-rose-800/50 p-3 rounded-lg space-y-1 text-rose-300">
-                    <div className="flex items-center gap-2 font-semibold">
-                      <AlertTriangle className="w-4 h-4 text-rose-400" />
-                      <span>Execution Error / Guardrail Blocked</span>
+                  <div className="flex items-start gap-2 text-rose-300 bg-rose-950/40 border border-rose-800/60 p-3 rounded-lg">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <div className="font-semibold text-rose-200">Query Execution Error</div>
+                      <div className="text-xs text-rose-300/90">{msg.error}</div>
                     </div>
-                    <div className="text-rose-200/90 text-[11px] pl-6">{msg.error}</div>
                   </div>
                 )}
 
-                {/* Query Result Output */}
+                {/* Response Message */}
                 {msg.type === "response" && (
-                  <div className="bg-slate-900/60 border border-slate-800 rounded-lg p-3 space-y-3">
-                    {/* SQL Banner & Meta */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-800/70">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950/70 border border-emerald-700/50 text-emerald-300 font-semibold uppercase">
-                          SQL Executed
+                  <div className="space-y-2.5 bg-slate-900/40 border border-slate-800 rounded-lg p-3">
+                    {/* Execution Meta Bar */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400 border-b border-slate-800/80 pb-2">
+                      <div className="flex items-center gap-3">
+                        <span className="flex items-center gap-1 text-cyan-400">
+                          <Code className="w-3.5 h-3.5" />
+                          {msg.engine || "SQLite Engine"}
                         </span>
                         {msg.executionTimeMs !== undefined && (
-                          <span className="flex items-center gap-1 text-[11px] text-slate-400">
-                            <Clock className="w-3 h-3 text-cyan-400" />
+                          <span className="flex items-center gap-1 text-slate-400">
+                            <Clock className="w-3 h-3" />
                             {msg.executionTimeMs}ms
                           </span>
                         )}
                         {msg.rowCount !== undefined && (
-                          <span className="text-[11px] text-slate-400">
-                            • {msg.rowCount} {msg.rowCount === 1 ? "row" : "rows"}
+                          <span className="text-emerald-400 font-medium">
+                            {msg.rowCount} {msg.rowCount === 1 ? "row" : "rows"}
                           </span>
                         )}
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => toggleViewMode(msg.id)}
-                          className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] transition-colors"
-                        >
-                          {viewModes[msg.id] === "json" ? (
-                            <>
-                              <TableIcon className="w-3 h-3 text-cyan-400" />
-                              Table View
-                            </>
-                          ) : (
-                            <>
-                              <Code className="w-3 h-3 text-amber-400" />
-                              JSON View
-                            </>
-                          )}
-                        </button>
+                      <div className="flex items-center gap-1">
+                        {msg.rows && msg.rows.length > 0 && (
+                          <button
+                            onClick={() => toggleViewMode(msg.id)}
+                            className="flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors text-[10px]"
+                          >
+                            <TableIcon className="w-3 h-3" />
+                            {viewModes[msg.id] === "json" ? "Table View" : "JSON View"}
+                          </button>
+                        )}
                         {msg.sql && (
                           <button
                             onClick={() => handleCopySql(msg.id, msg.sql!)}
-                            className="flex items-center gap-1 px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] transition-colors"
-                            title="Copy SQL query"
+                            className="flex items-center gap-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors text-[10px]"
                           >
                             {copiedId === msg.id ? (
                               <Check className="w-3 h-3 text-emerald-400" />
                             ) : (
-                              <Copy className="w-3 h-3 text-slate-400" />
+                              <Copy className="w-3 h-3" />
                             )}
                             {copiedId === msg.id ? "Copied" : "Copy SQL"}
                           </button>
@@ -386,7 +694,7 @@ export const ChatOpsTerminal: React.FC = () => {
 
                     {/* SQL Code Box */}
                     {msg.sql && (
-                      <div className="p-2.5 rounded bg-slate-950 border border-slate-800/90 text-cyan-300 font-mono text-[11px] overflow-x-auto">
+                      <div className="p-2.5 rounded bg-slate-950 border border-slate-800/90 text-cyan-300 font-mono text-[11px] overflow-x-auto whitespace-pre-wrap">
                         <code>{msg.sql}</code>
                       </div>
                     )}
@@ -463,31 +771,46 @@ export const ChatOpsTerminal: React.FC = () => {
             <div ref={terminalEndRef} />
           </div>
 
-          {/* Interactive Input Form */}
+          {/* Interactive Input Form with Controlled Form Validation */}
           <div className="p-3 bg-slate-900 border-t border-slate-800">
-            <div className="flex items-center gap-2 bg-slate-950 border border-slate-700/80 focus-within:border-emerald-500/80 rounded-lg px-3 py-2 transition-colors">
+            <div
+              className={`flex items-center gap-2 bg-slate-950 border rounded-lg px-3 py-2 transition-colors ${
+                validationErrors.length > 0
+                  ? "border-rose-500/80 ring-1 ring-rose-500/40"
+                  : "border-slate-700/80 focus-within:border-emerald-500/80"
+              }`}
+            >
               <span className="text-emerald-400 font-bold shrink-0">opspilot&gt;</span>
               <input
                 ref={inputRef}
                 type="text"
                 value={inputQuery}
-                onChange={(e) => setInputQuery(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask English query (e.g. 'Show me all critical database incidents') or direct SQL..."
+                placeholder="Ask English query (e.g. 'Show me critical incidents') or SQL..."
                 disabled={isLoading}
                 className="flex-1 bg-transparent border-none text-slate-100 placeholder-slate-500 focus:outline-none text-xs font-mono"
               />
               <button
                 onClick={() => executeQuery(inputQuery)}
-                disabled={!inputQuery.trim() || isLoading}
+                disabled={!inputQuery.trim() || isLoading || validationErrors.length > 0}
                 className="p-1.5 rounded-md bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 disabled:opacity-40 transition-colors"
                 title="Send query"
               >
                 <Send className="w-3.5 h-3.5" />
               </button>
             </div>
+
+            {/* Form Validation Feedback Banner */}
+            {validationErrors.length > 0 && (
+              <div className="mt-1.5 px-2 py-1 bg-rose-950/50 border border-rose-800/40 rounded text-[11px] text-rose-300 flex items-center gap-1.5">
+                <AlertTriangle className="w-3 h-3 text-rose-400 shrink-0" />
+                <span>{validationErrors[0]}</span>
+              </div>
+            )}
+
             <div className="flex items-center justify-between mt-2 px-1 text-[10px] text-slate-500">
-              <span>Press Enter to query • Up/Down arrows for command history</span>
+              <span>Press Enter to query • Form Validation Active</span>
               <span className="text-emerald-400/80">SQLite WAL Active</span>
             </div>
           </div>

@@ -8,6 +8,7 @@ from .events import router as events_router
 from .sync import router as sync_router
 from .correlation import router as correlation_router
 from .incidents import router as incidents_router
+from .knowledge_base import router as knowledge_base_router
 
 __all__ = [
     "health_router",
@@ -20,4 +21,5 @@ __all__ = [
     "sync_router",
     "correlation_router",
     "incidents_router",
+    "knowledge_base_router",
 ]
