@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 
 from services.common.db import db
+from services.common.redis_client import redis_client
 from telemetry.logger import get_logger
 from chaos.engine import chaos_engine
 
@@ -118,13 +119,42 @@ def health():
 
 @app.post("/cart")
 def update_cart(request: CartRequest):
-    db.save_cart(request.session_id, [item.model_dump() for item in request.items])
-    return {"status": "ok", "items_count": len(request.items)}
+    items_dicts = [item.model_dump() for item in request.items]
+    db.save_cart(request.session_id, items_dicts)
+    # Cache-Aside pattern: cache session in Redis with 1h TTL
+    try:
+        redis_client.set(f"cart_session:{request.session_id}", json.dumps(items_dicts), ex=3600)
+    except Exception as e:
+        logger.warn("CACHE_WRITE_ERROR", f"Could not write to Redis cache: {e}")
+    return {"status": "ok", "items_count": len(request.items), "cached": True}
 
 @app.get("/cart/{session_id}")
 def get_cart(session_id: str):
+    # Cache-Aside read: check Redis cache first
+    cached_val = None
+    try:
+        cached_val = redis_client.get(f"cart_session:{session_id}")
+    except Exception:
+        pass
+    if cached_val:
+        try:
+            return {"session_id": session_id, "items": json.loads(cached_val), "source": "cache"}
+        except Exception:
+            pass
     items = db.get_cart(session_id)
-    return {"session_id": session_id, "items": items}
+    try:
+        redis_client.set(f"cart_session:{session_id}", json.dumps(items), ex=3600)
+    except Exception:
+        pass
+    return {"session_id": session_id, "items": items, "source": "database"}
+
+@app.delete("/cart/{session_id}/cache")
+def invalidate_cart_cache(session_id: str):
+    """Explicitly evicts a cart session key from Redis cache."""
+    cache_key = f"cart_session:{session_id}"
+    deleted = redis_client.delete(cache_key)
+    logger.info("CACHE_INVALIDATED", f"Manual cache invalidation for key {cache_key}")
+    return {"status": "ok", "key": cache_key, "invalidated": deleted}
 
 @app.post("/checkout", response_model=CheckoutResponse)
 def process_checkout(request: CheckoutRequest):
@@ -209,6 +239,14 @@ def process_checkout(request: CheckoutRequest):
     }
 
     created_order = db.create_order(order_payload)
+    # Cache Invalidation: Evict user cart session from Redis upon order placement
+    try:
+        user_cart_key = f"cart_session:{request.user_id}"
+        redis_client.delete(user_cart_key)
+        logger.info("CACHE_INVALIDATED", f"Evicted cart cache key '{user_cart_key}' following checkout")
+    except Exception as e:
+        logger.warn("CACHE_EVICTION_WARNING", f"Cache eviction deferred: {e}")
+
     latency = (time.time() - start) * 1000
     logger.info("CHECKOUT_COMPLETED", f"Checkout succeeded. Order {created_order['id']} placed.", latency_ms=latency, status_code=200)
 

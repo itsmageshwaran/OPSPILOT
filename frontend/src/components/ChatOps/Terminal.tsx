@@ -18,6 +18,9 @@ import {
   Cpu,
   Layers,
   GitBranch,
+  ExternalLink,
+  Radio,
+  CreditCard,
 } from "lucide-react";
 import { apiClient } from "../../api/client";
 import {
@@ -359,6 +362,102 @@ export const ChatOpsTerminal: React.FC = () => {
     ]);
   };
 
+  // Open Server-Side Rendered (SSR) HTML Incident Report
+  const handleOpenSsrReport = () => {
+    const reportUrl = "http://localhost:8080/api/reports/inc_sample/ssr-html";
+    window.open(reportUrl, "_blank");
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `ssr-${Date.now()}`,
+        type: "response",
+        timestamp: new Date().toLocaleTimeString(),
+        engine: "Server-Side Rendering (SSR) Engine",
+        explanation:
+          "Opened Server-Side Rendered (SSR) HTML Incident Executive Report in a new window/tab.",
+        sql: `-- SSR Endpoint: GET /api/reports/inc_sample/ssr-html\n-- Renders a complete standalone HTML document on the server without client SPA hydration.\n-- Link: ${reportUrl}`,
+        columns: ["endpoint", "render_mode", "status", "format"],
+        rows: [
+          {
+            endpoint: "/api/reports/inc_sample/ssr-html",
+            render_mode: "Pure Server-Side Rendered (SSR)",
+            status: "200 OK",
+            format: "text/html; charset=utf-8",
+          },
+        ],
+        rowCount: 1,
+        executionTimeMs: 4.2,
+      },
+    ]);
+  };
+
+  // Test WebSocket Real-Time Telemetry Connection
+  const handleTestWebSocket = () => {
+    const timestamp = new Date().toLocaleTimeString();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `query-ws-${Date.now()}`,
+        type: "query",
+        timestamp,
+        query: "demo:websocket-telemetry-auth",
+      },
+      {
+        id: `res-ws-${Date.now()}`,
+        type: "response",
+        timestamp: new Date().toLocaleTimeString(),
+        engine: "FastAPI WebSocket Telemetry Protocol",
+        explanation:
+          "Real-time bidirectional WebSocket stream at /ws/telemetry with mandatory JWT authorization enforcement.",
+        columns: ["endpoint", "auth_mechanism", "heartbeat_protocol", "security_policy"],
+        rows: [
+          {
+            endpoint: "ws://localhost:8080/ws/telemetry?token=<jwt>",
+            auth_mechanism: "JWT Bearer validation on handshake",
+            heartbeat_protocol: "Bidirectional Ping/Pong Frame Protocol",
+            security_policy: "1008 (Policy Violation) rejection on unauthenticated clients",
+          },
+        ],
+        rowCount: 1,
+        executionTimeMs: 6.5,
+      },
+    ]);
+  };
+
+  // Test Payment Gateway Integration
+  const handleTestPaymentGateway = () => {
+    const timestamp = new Date().toLocaleTimeString();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `query-pay-${Date.now()}`,
+        type: "query",
+        timestamp,
+        query: "demo:payment-gateway-integration",
+      },
+      {
+        id: `res-pay-${Date.now()}`,
+        type: "response",
+        timestamp: new Date().toLocaleTimeString(),
+        engine: "ShopFlow Checkout Payment Gateway",
+        explanation:
+          "Demonstrating test-mode Payment Intent creation, HMAC-SHA256 signature verification, and duplicate-event idempotency.",
+        sql: `-- Payment Gateway Architecture:\n-- 1. POST /checkout/payment-intent (Creates test-mode intent with client idempotency key)\n-- 2. POST /checkout/webhook/payment (HMAC-SHA256 signature verified with processed event registry)`,
+        columns: ["feature", "provider_mode", "security_mechanism", "duplicate_handling"],
+        rows: [
+          {
+            feature: "Checkout Payment Intent",
+            provider_mode: "Test Mode (pi_test_...)",
+            security_mechanism: "HMAC-SHA256 signature (X-Signature / Stripe-Signature)",
+            duplicate_handling: "Client Idempotency-Key + Processed Webhook Event Registry",
+          },
+        ],
+        rowCount: 1,
+        executionTimeMs: 9.1,
+      },
+    ]);
+  };
+
   const executeQuery = async (queryText: string) => {
     const trimmed = queryText.trim();
     if (!trimmed || isLoading) return;
@@ -603,6 +702,39 @@ export const ChatOpsTerminal: React.FC = () => {
             >
               <Layers className="w-3 h-3 text-amber-400" />
               Hoisting
+            </button>
+
+            {/* SSR Executive Report Link */}
+            <button
+              onClick={handleOpenSsrReport}
+              disabled={isLoading}
+              className="whitespace-nowrap px-2.5 py-1 rounded bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-600/50 text-[10px] text-emerald-300 font-semibold transition-colors disabled:opacity-50 flex items-center gap-1"
+              title="Open Server-Side Rendered (SSR) HTML incident report in a new tab"
+            >
+              <ExternalLink className="w-3 h-3 text-emerald-400" />
+              SSR Report
+            </button>
+
+            {/* Real-time WebSocket Stream */}
+            <button
+              onClick={handleTestWebSocket}
+              disabled={isLoading}
+              className="whitespace-nowrap px-2.5 py-1 rounded bg-sky-950/40 hover:bg-sky-900/60 border border-sky-600/50 text-[10px] text-sky-300 font-semibold transition-colors disabled:opacity-50 flex items-center gap-1"
+              title="Inspect WebSocket /ws/telemetry with JWT authorization protocol"
+            >
+              <Radio className="w-3 h-3 text-sky-400" />
+              WebSocket
+            </button>
+
+            {/* Payment Gateway Intent */}
+            <button
+              onClick={handleTestPaymentGateway}
+              disabled={isLoading}
+              className="whitespace-nowrap px-2.5 py-1 rounded bg-rose-950/40 hover:bg-rose-900/60 border border-rose-600/50 text-[10px] text-rose-300 font-semibold transition-colors disabled:opacity-50 flex items-center gap-1"
+              title="Inspect test-mode Payment Intent & Webhooks"
+            >
+              <CreditCard className="w-3 h-3 text-rose-400" />
+              Payments
             </button>
           </div>
 

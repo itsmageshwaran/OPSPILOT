@@ -8,13 +8,26 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, Request, Response, UploadFile, File, HTTPException, status, Depends
+from fastapi import (
+    FastAPI,
+    Request,
+    Response,
+    UploadFile,
+    File,
+    HTTPException,
+    status,
+    Depends,
+    WebSocket,
+    WebSocketDisconnect,
+    Query,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.auth import decode_token, verify_jwt_authorization
 from app.database.session import init_db, get_db
 from app.database.repository import TelemetryRepository
 from app.api.routes import (
@@ -461,6 +474,67 @@ def get_cron_status():
         "is_active": True,
         "statistics": cron_stats
     }
+
+# ------------------------------------------------------------------------------
+# WebSocket Real-Time Telemetry Stream with Authorization
+# ------------------------------------------------------------------------------
+@app.websocket("/ws/telemetry")
+async def websocket_telemetry_stream(
+    websocket: WebSocket,
+    token: Optional[str] = Query(None)
+):
+    """
+    WebSocket Real-Time Communication with Mandatory JWT Authorization:
+    Rejects unauthorized clients with WebSocket close code 1008 (Policy Violation).
+    Authenticated clients receive live telemetry stream frames and bidirectional messaging.
+    """
+    if not token or not decode_token(token):
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION,
+            reason="Unauthorized: Valid JWT required"
+        )
+        return
+
+    await websocket.accept()
+    logger.info("WebSocket telemetry stream established with authenticated client")
+    try:
+        await websocket.send_json({
+            "type": "CONNECTION_ESTABLISHED",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "status": "authenticated",
+            "cluster_state": "OPTIMAL"
+        })
+        while True:
+            msg = await websocket.receive_text()
+            if msg.strip().lower() == "ping":
+                await websocket.send_json({
+                    "type": "PONG",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "message": "heartbeat acknowledged"
+                })
+            else:
+                await websocket.send_json({
+                    "type": "TELEMETRY_ACK",
+                    "received_payload": msg[:100],
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                })
+    except (WebSocketDisconnect, asyncio.CancelledError):
+        logger.info("WebSocket telemetry stream disconnected")
+    except Exception as e:
+        logger.warning(f"WebSocket telemetry error: {e}")
+
+# ------------------------------------------------------------------------------
+# HTTP Auth Verification Endpoint
+# ------------------------------------------------------------------------------
+@app.get(
+    "/api/auth/verify-token",
+    status_code=status.HTTP_200_OK,
+    summary="Verify JWT Bearer token claims",
+    tags=["Authentication"]
+)
+def verify_token_endpoint(user: dict = Depends(verify_jwt_authorization)):
+    """Verifies that the provided JWT is valid and returns user claims."""
+    return {"status": "authenticated", "user": user}
 
 @app.get("/", status_code=status.HTTP_200_OK)
 def root():
