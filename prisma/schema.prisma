@@ -1,7 +1,10 @@
 // ==============================================================================
 // Prisma ORM Schema Specification for OpsPilot & ShopFlow
-// Defines relational database models, 1NF/2NF/3NF relations, compound indexes,
-// and referential integrity constraints for PostgreSQL / SQLite.
+// Demonstrates:
+// 1. SQL JOINs: Relational relations via @relation(fields: [...], references: [...])
+// 2. Normalization: 1NF, 2NF, 3NF schemas with primary keys and foreign keys
+// 3. SQL Indexing: Compound B-Tree indexes via @@index([...])
+// 4. SQL Transactions: Referential integrity with onDelete: Cascade / Restrict
 // ==============================================================================
 
 datasource db {

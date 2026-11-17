@@ -1,20 +1,7 @@
 import time
-from fastapi import FastAPI, HTTPException, Depends, Header
-from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
-
-from services.common.db import db
-from services.common.security import verify_password, create_access_token, decode_token
-from telemetry.logger import get_logger
-from chaos.engine import chaos_engine
-
-logger = get_logger("auth-service")
-
-app = FastAPI(title="ShopFlow Auth Service", version="1.0.0")
-
-import time
 import uuid
 import re
+import bcrypt
 from fastapi import FastAPI, HTTPException, Depends, Header, status
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any, List
@@ -108,8 +95,10 @@ def register(request: RegisterRequest):
             detail=f"User with email '{request.email}' already exists."
         )
 
-    # Password hashing using bcrypt
-    hashed_pwd = get_password_hash(request.password)
+    # Password hashing using bcrypt with 12 salt rounds
+    plain_bytes = request.password.encode("utf-8")[:72]
+    salt = bcrypt.gensalt(rounds=12)
+    hashed_pwd = bcrypt.hashpw(plain_bytes, salt).decode("utf-8")
 
     new_user = {
         "id": f"usr_{uuid.uuid4().hex[:8]}",
