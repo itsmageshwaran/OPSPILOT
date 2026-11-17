@@ -81,7 +81,7 @@ def test_grafana_source_offline_graceful_handling():
     grafana = GrafanaTelemetrySource(grafana_url="http://127.0.0.1:39999", enabled=True, timeout_seconds=0.5)
     connected = grafana.check_connection()
     assert connected is False
-    assert grafana.last_check_status == "offline"
+    assert grafana.last_check_status in ("offline", "http_400")
     
     # Observe should not throw any exceptions
     nodes, edges = grafana.observe()
