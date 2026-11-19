@@ -85,6 +85,8 @@ tmp/
 temp/
 cache/
 .temp/
+data/uploads/
+!data/uploads/.gitkeep
 
 # Environment Variables & Secrets (Keep .env.example files)
 .env

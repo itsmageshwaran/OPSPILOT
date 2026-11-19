@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import html
 import json
 import logging
 import os
@@ -8,31 +7,12 @@ import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Optional
-
-# Ensure shopflow-test is on sys.path for shared services
-_current_dir = os.path.dirname(os.path.abspath(__file__))
-_shopflow_path = os.path.abspath(os.path.join(_current_dir, "..", "..", "shopflow-test"))
-if _shopflow_path not in sys.path:
-    sys.path.insert(0, _shopflow_path)
-
-try:
-    from services.common.redis_client import redis_client
-except Exception:
-    class DummyRedisClient:
-        def set(self, k, v, ex=None): return True
-        def get(self, k): return None
-        def delete(self, k): return True
-        def acquire_lock(self, k, ttl=30): return True
-        def release_lock(self, k): return True
-    redis_client = DummyRedisClient()
+from typing import Optional, Dict, Any
 
 from fastapi import (
     FastAPI,
     Request,
     Response,
-    UploadFile,
-    File,
     HTTPException,
     status,
     Depends,
@@ -42,13 +22,23 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.auth import decode_token, verify_jwt_authorization
+from app.auth import router as auth_router, decode_token, verify_jwt_authorization
 from app.database.session import init_db, get_db
 from app.database.repository import TelemetryRepository
+from app.database.transactions import execute_atomic_financial_transfer
+from app.middleware import (
+    RequestTimingAndCorrelationMiddleware,
+    SecurityHeadersMiddleware,
+    AuditLoggingMiddleware,
+)
+from app.cache import cache_manager as redis_client
+from app.cron import scheduled_telemetry_sweep, trigger_manual_sweep, get_cron_status as cron_get_status, cron_stats
+from app.ssr import render_incident_html_report
+from app.sanitizer import detect_sql_injection, sanitize_html, sanitize_input
+
 from app.api.routes import (
     health_router,
     services_router,
@@ -64,6 +54,8 @@ from app.api.routes import (
     ai_agent_router,
     checkout_router,
 )
+from app.api.routes.upload import router as upload_router
+from app.api.status_codes import router as status_codes_router
 from app.chatops.nlq import router as chatops_router
 
 logging.basicConfig(
@@ -71,51 +63,7 @@ logging.basicConfig(
     format='{"timestamp": "%(asctime)s", "logger": "%(name)s", "level": "%(levelname)s", "message": "%(message)s"}'
 )
 logger = logging.getLogger("opspilot.main")
-logger = logging.getLogger("opspilot.main")
 
-# ------------------------------------------------------------------------------
-# Scheduled Cron / Background Maintenance Task
-# ------------------------------------------------------------------------------
-cron_stats = {
-    "runs_count": 0,
-    "last_run_timestamp": None,
-    "items_swept": 0,
-    "status": "idle"
-}
-
-async def scheduled_telemetry_sweep(interval_seconds: int = 60):
-    """
-    Scheduled cron job: Periodically purges stale telemetry buffers,
-    verifies database connectivity, and logs health check heartbeats.
-    Uses distributed Redis locking to prevent duplicate scheduled execution across workers.
-    """
-    while True:
-        try:
-            await asyncio.sleep(interval_seconds)
-
-            # Prevent duplicate scheduled execution across multiple worker processes
-            lock_acquired = redis_client.acquire_lock("lock:cron:scheduled_telemetry_sweep", ttl=interval_seconds - 5)
-            if not lock_acquired:
-                logger.info("[CronJob] Another worker holds the distributed scheduled sweep lock. Skipping duplicate execution.")
-                continue
-
-            cron_stats["runs_count"] += 1
-            cron_stats["last_run_timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            cron_stats["status"] = "running_sweep"
-            # Sweep simulated stale items
-            swept_count = 5  # normalized periodic cleanup batch
-            cron_stats["items_swept"] += swept_count
-            cron_stats["status"] = "idle"
-            logger.info(
-                f"[CronJob] Scheduled telemetry sweep executed successfully. "
-                f"Run #{cron_stats['runs_count']}, total swept: {cron_stats['items_swept']}"
-            )
-        except asyncio.CancelledError:
-            logger.info("[CronJob] Scheduled telemetry sweep loop cancelled.")
-            break
-        except Exception as e:
-            cron_stats["status"] = f"error: {str(e)}"
-            logger.error(f"[CronJob] Error in background scheduled sweep: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -154,6 +102,7 @@ async def lifespan(app: FastAPI):
         pass
     logger.info("OpsPilot backend service shutting down.")
 
+
 app = FastAPI(
     title="OpsPilot — Autonomous AIOps Platform",
     version="1.0.0",
@@ -162,41 +111,11 @@ app = FastAPI(
 )
 
 # ------------------------------------------------------------------------------
-# Custom Middlewares (Request Timing & Security Headers)
+# Custom Middlewares (Request Timing, Security Headers, Audit Logging)
 # ------------------------------------------------------------------------------
-class RequestTimingAndCorrelationMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware that records precise request duration and attaches
-    correlation tracing IDs (X-Correlation-ID, X-Response-Time-Ms).
-    """
-    async def dispatch(self, request: Request, call_next):
-        start_time = time.perf_counter()
-        correlation_id = request.headers.get("X-Correlation-ID") or f"corr_{uuid.uuid4().hex[:12]}"
-        
-        # Attach correlation ID to request state for downstream handlers
-        request.state.correlation_id = correlation_id
-        
-        response: Response = await call_next(request)
-        
-        duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
-        response.headers["X-Response-Time-Ms"] = str(duration_ms)
-        response.headers["X-Correlation-ID"] = correlation_id
-        return response
-
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware that enforces HTTP security headers on all API responses.
-    """
-    async def dispatch(self, request: Request, call_next):
-        response: Response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        return response
-
 app.add_middleware(RequestTimingAndCorrelationMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(AuditLoggingMiddleware)
 
 # CORS
 app.add_middleware(
@@ -222,70 +141,81 @@ app.include_router(knowledge_base_router)
 app.include_router(chatops_router)
 app.include_router(ai_agent_router)
 app.include_router(checkout_router)
+app.include_router(auth_router)
+app.include_router(upload_router)
+app.include_router(status_codes_router)
+
 
 # ------------------------------------------------------------------------------
-# File Upload Handling: Multipart telemetry/bundle upload endpoint
+# Redis Caching Tier Endpoints
 # ------------------------------------------------------------------------------
-UPLOAD_DIR = os.path.join(os.getcwd(), "data", "uploads")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-ALLOWED_UPLOAD_EXTENSIONS = {".json", ".log", ".csv", ".txt", ".zip"}
-MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+@app.get("/api/cache/stats", tags=["Redis Caching"])
+def get_cache_stats():
+    """Returns real-time caching layer diagnostics and connected status."""
+    return redis_client.get_stats()
 
-@app.post(
-    "/api/telemetry/upload-bundle",
-    status_code=status.HTTP_201_CREATED,
-    summary="Upload telemetry log bundle or incident diagnostic package",
-    tags=["Telemetry Upload"]
-)
-async def upload_telemetry_bundle(file: UploadFile = File(...)):
+
+@app.post("/api/cache/invalidate", tags=["Redis Caching"])
+def invalidate_cache_key(key: str = Query(..., description="Cache key to purge")):
+    """Active cache invalidation upon telemetry data mutation."""
+    success = redis_client.delete(key)
+    return {"key": key, "invalidated": success, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+
+# ------------------------------------------------------------------------------
+# SQL ACID Transactions: Atomic Financial Transfer & Rollback Endpoint
+# ------------------------------------------------------------------------------
+@app.post("/api/financial/transfer", tags=["SQL Transactions"])
+def financial_transfer_transaction(
+    sender: str = Query("usr_sender_01"),
+    receiver: str = Query("usr_receiver_02"),
+    amount: float = Query(50.0),
+    simulate_fault: bool = Query(False),
+    db: Session = Depends(get_db)
+):
     """
-    File Upload Handling with strict validation:
-    - MIME / extension allowlist (.json, .log, .csv, .txt, .zip)
-    - File size limits (<= 10MB)
-    - SHA-256 integrity calculation
-    - Secure disk persistence
+    Executes a relational database ACID transaction.
+    Demonstrates commit on success and automatic rollback when simulate_fault is True.
     """
-    if not file.filename:
+    try:
+        result = execute_atomic_financial_transfer(
+            db=db,
+            sender_user_id=sender,
+            receiver_user_id=receiver,
+            amount=amount,
+            simulate_fault=simulate_fault
+        )
+        return {"status": "SUCCESS", "transaction": result}
+    except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Filename must not be empty"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Transaction rolled back: {str(e)}"
         )
 
-    _, ext = os.path.splitext(file.filename.lower())
-    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file extension '{ext}'. Allowed extensions: {list(ALLOWED_UPLOAD_EXTENSIONS)}"
-        )
 
-    contents = await file.read()
-    file_size = len(contents)
+# ------------------------------------------------------------------------------
+# Input Sanitization & Injection Defense Endpoint
+# ------------------------------------------------------------------------------
+@app.post("/api/security/sanitize", tags=["Security & Sanitization"])
+def sanitize_security_input(payload: Dict[str, Any]):
+    """
+    Demonstrates Input Sanitization and SQL/XSS Injection Awareness:
+    - Scans query strings for destructive SQL injection vectors.
+    - Encodes raw strings to HTML entities preventing Cross-Site Scripting (XSS).
+    """
+    query = payload.get("query", "")
+    comment = payload.get("comment", "")
 
-    if file_size > MAX_FILE_SIZE_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File exceeds maximum allowed size of {MAX_FILE_SIZE_BYTES / (1024 * 1024):.1f} MB"
-        )
-
-    sha256_hash = hashlib.sha256(contents).hexdigest()
-    safe_filename = f"{uuid.uuid4().hex[:10]}_{os.path.basename(file.filename)}"
-    destination_path = os.path.join(UPLOAD_DIR, safe_filename)
-
-    with open(destination_path, "wb") as f:
-        f.write(contents)
-
-    logger.info(f"Uploaded telemetry bundle '{safe_filename}' ({file_size} bytes, SHA-256: {sha256_hash[:12]})")
+    is_injection, reason = detect_sql_injection(query)
+    sanitized_comment = sanitize_html(comment)
 
     return {
-        "status": "success",
-        "message": "Telemetry bundle uploaded and validated successfully.",
-        "filename": safe_filename,
-        "original_filename": file.filename,
-        "size_bytes": file_size,
-        "sha256": sha256_hash,
-        "stored_at": destination_path,
-        "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        "sql_injection_detected": is_injection,
+        "analysis": reason,
+        "sanitized_comment": sanitized_comment,
+        "status": "BLOCKED" if is_injection else "SAFE"
     }
+
 
 # ------------------------------------------------------------------------------
 # Server-Side Rendering (SSR) Incident Executive Summary Report
@@ -325,156 +255,12 @@ def get_incident_ssr_report(incident_id: str, db: Session = Depends(get_db)):
             "summary": "Connection pool exhaustion propagated downstream latency to order-api and checkout-api."
         }
 
-    title = html.escape(incident.get("title", f"Incident {incident_id}"))
-    severity = html.escape(str(incident.get("severity", "UNKNOWN")))
-    inc_status = html.escape(str(incident.get("status", "UNKNOWN")))
-    root_cause = html.escape(str(incident.get("root_cause_service", "None")))
-    summary = html.escape(str(incident.get("summary", "No summary available")))
-    score = incident.get("correlation_score", 0.0)
-    started_at = html.escape(str(incident.get("started_at", "N/A")))
-    services = [html.escape(s) for s in incident.get("affected_services", [])]
+    html_content = render_incident_html_report(incident)
+    return HTMLResponse(content=html_content, status_code=status.HTTP_200_OK)
 
-    sev_color = "#ef4444" if severity == "CRITICAL" else "#f59e0b"
-    services_pills = " ".join(
-        f'<span style="background:#1e293b;color:#38bdf8;padding:4px 10px;border-radius:12px;font-size:12px;font-family:monospace;margin-right:6px;">{s}</span>'
-        for s in services
-    )
-
-    rendered_html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpsPilot SSR Incident Report — {incident_id}</title>
-    <style>
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background: #0f172a;
-            color: #f8fafc;
-            margin: 0;
-            padding: 40px 20px;
-            line-height: 1.6;
-        }}
-        .container {{
-            max-width: 900px;
-            margin: 0 auto;
-            background: #1e293b;
-            border-radius: 12px;
-            border: 1px solid #334155;
-            padding: 32px;
-            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
-        }}
-        .header {{
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            border-bottom: 1px solid #334155;
-            padding-bottom: 20px;
-            margin-bottom: 24px;
-        }}
-        .badge {{
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 9999px;
-            font-weight: 700;
-            font-size: 13px;
-            text-transform: uppercase;
-        }}
-        .grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }}
-        .card {{
-            background: #0f172a;
-            padding: 16px;
-            border-radius: 8px;
-            border: 1px solid #334155;
-        }}
-        .card-label {{
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #94a3b8;
-            margin-bottom: 4px;
-        }}
-        .card-val {{
-            font-size: 18px;
-            font-weight: 600;
-            color: #f1f5f9;
-        }}
-        .summary-box {{
-            background: #090d16;
-            border-left: 4px solid {sev_color};
-            padding: 16px;
-            border-radius: 4px;
-            margin-bottom: 24px;
-            font-family: monospace;
-            font-size: 13px;
-            color: #cbd5e1;
-        }}
-        .footer {{
-            border-top: 1px solid #334155;
-            padding-top: 16px;
-            font-size: 12px;
-            color: #64748b;
-            display: flex;
-            justify-content: space-between;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div>
-                <span class="badge" style="background:{sev_color}22;color:{sev_color};border:1px solid {sev_color}55;">{severity}</span>
-                <span class="badge" style="background:#3b82f622;color:#60a5fa;border:1px solid #3b82f655;margin-left:8px;">{inc_status}</span>
-                <h1 style="margin: 12px 0 6px 0; font-size: 24px;">{title}</h1>
-                <div style="font-size: 12px; color: #94a3b8;">Incident ID: <code>{incident_id}</code> &bull; Started: {started_at}</div>
-            </div>
-            <div style="text-align: right;">
-                <div style="font-size: 11px; color: #94a3b8; text-transform: uppercase;">SSR Mode</div>
-                <div style="font-size: 14px; font-weight: 600; color: #10b981;">&bull; Server-Rendered HTML</div>
-            </div>
-        </div>
-
-        <div class="grid">
-            <div class="card">
-                <div class="card-label">Identified Root Cause</div>
-                <div class="card-val" style="color: #f43f5e;">{root_cause}</div>
-            </div>
-            <div class="card">
-                <div class="card-label">Correlation Confidence</div>
-                <div class="card-val" style="color: #10b981;">{round(score * 100, 1)}%</div>
-            </div>
-            <div class="card">
-                <div class="card-label">Alert Count</div>
-                <div class="card-val">{incident.get("alert_count", 0)}</div>
-            </div>
-        </div>
-
-        <div style="margin-bottom: 24px;">
-            <div class="card-label" style="margin-bottom: 8px;">Impacted Services Cascade</div>
-            <div>{services_pills}</div>
-        </div>
-
-        <div class="card-label" style="margin-bottom: 8px;">Executive Summary & Root Cause Analysis</div>
-        <div class="summary-box">
-            {summary}
-        </div>
-
-        <div class="footer">
-            <span>OpsPilot Autonomous AIOps Platform — Server-Side Rendered Executive Summary</span>
-            <span>Generated: {time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())}</span>
-        </div>
-    </div>
-</body>
-</html>"""
-    return HTMLResponse(content=rendered_html, status_code=status.HTTP_200_OK)
 
 # ------------------------------------------------------------------------------
-# Scheduled Job / Cron Manual Trigger & Status Endpoint
+# Scheduled Job / Cron Manual Trigger & Status Endpoints
 # ------------------------------------------------------------------------------
 @app.post(
     "/api/cron/trigger-sweep",
@@ -483,18 +269,9 @@ def get_incident_ssr_report(incident_id: str, db: Session = Depends(get_db)):
     tags=["Scheduled Jobs"]
 )
 async def trigger_cron_sweep():
-    """
-    Manually fires the background cron job and returns execution statistics.
-    """
-    cron_stats["runs_count"] += 1
-    cron_stats["last_run_timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    cron_stats["items_swept"] += 8
-    logger.info(f"[CronJob] Manual trigger executed. Run #{cron_stats['runs_count']}")
-    return {
-        "status": "success",
-        "action": "scheduled_telemetry_sweep",
-        "cron_stats": cron_stats
-    }
+    """Manually fires the background cron job and returns execution statistics."""
+    return trigger_manual_sweep()
+
 
 @app.get(
     "/api/cron/status",
@@ -503,12 +280,9 @@ async def trigger_cron_sweep():
     tags=["Scheduled Jobs"]
 )
 def get_cron_status():
-    return {
-        "job_name": "scheduled_telemetry_sweep",
-        "interval_seconds": 60,
-        "is_active": True,
-        "statistics": cron_stats
-    }
+    """Returns runtime execution statistics for scheduled cron jobs."""
+    return cron_get_status()
+
 
 # ------------------------------------------------------------------------------
 # WebSocket Real-Time Telemetry Stream with Authorization & Subscriptions
@@ -607,18 +381,6 @@ async def websocket_telemetry_stream(
     except Exception as e:
         logger.warning(f"WebSocket telemetry error for '{user_email}': {e}")
 
-# ------------------------------------------------------------------------------
-# HTTP Auth Verification Endpoint
-# ------------------------------------------------------------------------------
-@app.get(
-    "/api/auth/verify-token",
-    status_code=status.HTTP_200_OK,
-    summary="Verify JWT Bearer token claims",
-    tags=["Authentication"]
-)
-def verify_token_endpoint(user: dict = Depends(verify_jwt_authorization)):
-    """Verifies that the provided JWT is valid and returns user claims."""
-    return {"status": "authenticated", "user": user}
 
 @app.get("/", status_code=status.HTTP_200_OK)
 def root():
@@ -631,4 +393,3 @@ def root():
         "ssr_report_example": "/api/reports/inc_sample/ssr-html",
         "file_upload_url": "/api/telemetry/upload-bundle"
     }
-

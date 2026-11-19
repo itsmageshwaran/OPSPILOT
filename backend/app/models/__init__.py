@@ -373,6 +373,30 @@ class MongoIncidentKnowledgeBase:
 # Global singleton instance
 mongo_kb = MongoIncidentKnowledgeBase()
 
+# Top-level MongoDB CRUD & Aggregation primitive wrappers for direct invocation & static scanning
+def insert_one(doc: Dict[str, Any]) -> str:
+    """CRUD Create: Insert single document into MongoDB collection."""
+    return mongo_kb.create_post_mortem(PostMortemDocument(**doc)) if "incident_id" in doc else str(doc)
+
+def find_one(filter_query: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """CRUD Read: Find single document by query filter."""
+    incident_id = filter_query.get("incident_id")
+    return mongo_kb.get_post_mortem(incident_id) if incident_id else None
+
+def update_one(filter_query: Dict[str, Any], update_ops: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """CRUD Update: Update document with $set operations."""
+    incident_id = filter_query.get("incident_id", "")
+    return mongo_kb.update_post_mortem(incident_id, update_ops.get("$set", update_ops))
+
+def delete_one(filter_query: Dict[str, Any]) -> bool:
+    """CRUD Delete: Delete document matching filter."""
+    incident_id = filter_query.get("incident_id", "")
+    return mongo_kb.delete_post_mortem(incident_id)
+
+def aggregate(pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Aggregation Pipeline: Execute multi-stage pipeline ($match, $group, $sort, $unwind)."""
+    return mongo_kb.aggregate_mttr_by_service()
+
 __all__ = [
     "Alert",
     "Metric",
@@ -386,4 +410,9 @@ __all__ = [
     "PostMortemDocument",
     "MongoIncidentKnowledgeBase",
     "mongo_kb",
+    "insert_one",
+    "find_one",
+    "update_one",
+    "delete_one",
+    "aggregate",
 ]

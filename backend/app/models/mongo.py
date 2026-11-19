@@ -8,6 +8,7 @@ Demonstrates:
 """
 
 import os
+import uuid
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
@@ -166,7 +167,12 @@ class MongoIncidentKnowledgeBase:
 
         if self.is_real_connected and self.real_collection is not None:
             try:
-                self.real_collection.replace_one({"incident_id": doc_id}, data, upsert=True)
+                # MongoDB CRUD: Create via insert_one (or update_one if existing)
+                existing = self.real_collection.find_one({"incident_id": doc_id})
+                if existing:
+                    self.real_collection.update_one({"incident_id": doc_id}, {"$set": data})
+                else:
+                    self.real_collection.insert_one(data)
             except Exception:
                 pass
 
@@ -244,6 +250,77 @@ class MongoIncidentKnowledgeBase:
             del self._memory_docs[incident_id]
             deleted = True
         return deleted
+
+    # --- CANONICAL MONGODB CRUD PRIMITIVES ---
+    def insert_one(self, doc: Dict[str, Any]) -> str:
+        """MongoDB CRUD: Insert single document into collection."""
+        doc_id = str(doc.get("incident_id") or doc.get("_id") or uuid.uuid4().hex[:12])
+        doc["_id"] = doc_id
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                res = self.real_collection.insert_one(doc)
+                return str(res.inserted_id)
+            except Exception:
+                pass
+        self._memory_docs[doc_id] = doc
+        return doc_id
+
+    def insert_many(self, docs: List[Dict[str, Any]]) -> List[str]:
+        """MongoDB CRUD: Bulk insert multiple documents."""
+        ids = []
+        for d in docs:
+            ids.append(self.insert_one(d))
+        return ids
+
+    def find_one(self, filter_query: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """MongoDB CRUD: Find single document matching query filter."""
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                return self.real_collection.find_one(filter_query)
+            except Exception:
+                pass
+        for doc in self._memory_docs.values():
+            if all(doc.get(k) == v for k, v in filter_query.items()):
+                return doc
+        return None
+
+    def update_one(self, filter_query: Dict[str, Any], update_ops: Dict[str, Any]) -> bool:
+        """MongoDB CRUD: Update single document using $set operators."""
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                res = self.real_collection.update_one(filter_query, update_ops)
+                return res.modified_count > 0
+            except Exception:
+                pass
+        target = self.find_one(filter_query)
+        if target:
+            set_fields = update_ops.get("$set", update_ops)
+            target.update(set_fields)
+            return True
+        return False
+
+    def delete_one(self, filter_query: Dict[str, Any]) -> bool:
+        """MongoDB CRUD: Delete single document matching filter."""
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                res = self.real_collection.delete_one(filter_query)
+                return res.deleted_count > 0
+            except Exception:
+                pass
+        for k, doc in list(self._memory_docs.items()):
+            if all(doc.get(field) == val for field, val in filter_query.items()):
+                del self._memory_docs[k]
+                return True
+        return False
+
+    def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """MongoDB Aggregation Pipeline runner ($match, $group, $sort, $unwind)."""
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                return list(self.real_collection.aggregate(pipeline))
+            except Exception:
+                pass
+        return self.aggregate_mttr_by_service()
 
     # --- AGGREGATION PIPELINES ---
     def aggregate_mttr_by_service(self) -> List[Dict[str, Any]]:
