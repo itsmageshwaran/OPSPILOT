@@ -35,8 +35,8 @@ from app.middleware import (
     AuditLoggingMiddleware,
 )
 from app.cache import cache_manager as redis_client
-from app.cron import scheduled_telemetry_sweep, trigger_manual_sweep, get_cron_status as cron_get_status, cron_stats
-from app.ssr import render_incident_html_report
+from app.cron import scheduled_telemetry_sweep, trigger_manual_sweep, get_cron_status as cron_get_status, cron_stats, start_apscheduler_if_available
+from app.ssr import render_incident_html_report, render_ssr_template_response
 from app.sanitizer import detect_sql_injection, sanitize_html, sanitize_input
 
 from app.api.routes import (
@@ -88,7 +88,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug(f"Notice during startup topology load: {e}")
 
-    # Launch scheduled background cron job
+    # Launch scheduled background cron job via asyncio and APScheduler
+    start_apscheduler_if_available()
     cron_task = asyncio.create_task(scheduled_telemetry_sweep(interval_seconds=60))
     logger.info("OpsPilot backend service ready and background scheduled cron task started.")
     
@@ -111,8 +112,25 @@ app = FastAPI(
 )
 
 # ------------------------------------------------------------------------------
-# Custom Middlewares (Request Timing, Security Headers, Audit Logging)
+# Custom Middlewares (FastAPI @app.middleware decorator & Starlette Middleware classes)
 # ------------------------------------------------------------------------------
+@app.middleware("http")
+async def opspilot_http_timing_and_correlation_middleware(request: Request, call_next):
+    """
+    FastAPI HTTP Middleware: Injects request execution duration (X-Process-Time-Ms)
+    and propagates distributed correlation tracing identifier (X-Correlation-ID).
+    """
+    start_time = time.perf_counter()
+    correlation_id = request.headers.get("X-Correlation-ID") or f"corr_{uuid.uuid4().hex[:12]}"
+    request.state.correlation_id = correlation_id
+
+    response = await call_next(request)
+
+    duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+    response.headers["X-Process-Time-Ms"] = str(duration_ms)
+    response.headers["X-Correlation-ID"] = correlation_id
+    return response
+
 app.add_middleware(RequestTimingAndCorrelationMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(AuditLoggingMiddleware)
@@ -233,11 +251,11 @@ def sanitize_security_input(payload: Dict[str, Any]):
     status_code=status.HTTP_200_OK,
     include_in_schema=False
 )
-def get_incident_ssr_report(incident_id: str, db: Session = Depends(get_db)):
+def get_incident_ssr_report(incident_id: str, request: Request = None, db: Session = Depends(get_db)):
     """
     Demonstrates Server-Side Rendering (SSR):
     Renders a complete, standalone, responsive HTML5 document directly on the server
-    without requiring client-side JavaScript execution or SPA hydration.
+    using Jinja2Templates without requiring client-side JavaScript execution or SPA hydration.
     """
     incident = TelemetryRepository.get_incident_by_id(db, incident_id=incident_id)
     if not incident:
@@ -255,6 +273,8 @@ def get_incident_ssr_report(incident_id: str, db: Session = Depends(get_db)):
             "summary": "Connection pool exhaustion propagated downstream latency to order-api and checkout-api."
         }
 
+    if request is not None:
+        return render_ssr_template_response(request, incident)
     html_content = render_incident_html_report(incident)
     return HTMLResponse(content=html_content, status_code=status.HTTP_200_OK)
 

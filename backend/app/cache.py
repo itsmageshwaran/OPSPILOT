@@ -94,6 +94,25 @@ class RedisCacheManager:
         self._memory_ttls.pop(key, None)
         return True
 
+    def delete_pattern(self, pattern: str) -> int:
+        """Cache Invalidation: Purges all keys matching wildcard pattern."""
+        count = 0
+        if self._connected and self._client:
+            try:
+                keys = self._client.keys(pattern)
+                if keys:
+                    return int(self._client.delete(*keys))
+            except Exception:
+                self._connected = False
+
+        import fnmatch
+        to_del = [k for k in list(self._memory_cache.keys()) if fnmatch.fnmatch(k, pattern)]
+        for k in to_del:
+            self._memory_cache.pop(k, None)
+            self._memory_ttls.pop(k, None)
+            count += 1
+        return count
+
     def acquire_lock(self, key: str, ttl: int = 30) -> bool:
         """
         Distributed Lock Acquisition using Redis SETNX with TTL.

@@ -2,7 +2,8 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
-from jose import jwt, JWTError
+import jwt
+from jwt.exceptions import PyJWTError as JWTError
 import bcrypt
 from fastapi import APIRouter, HTTPException, status, Header, Depends
 from pydantic import BaseModel, Field

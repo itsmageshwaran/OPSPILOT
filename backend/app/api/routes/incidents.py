@@ -1,9 +1,11 @@
+import json
 from fastapi import APIRouter, Depends, Query, HTTPException, Body
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 
 from app.database.session import get_db
 from app.database.repository import TelemetryRepository
+from app.cache import cache_manager
 from app.root_cause import root_cause_service, RootCauseAnalysis, RootCauseRequest
 from app.remediation import (
     remediation_service,
@@ -14,17 +16,35 @@ from app.remediation import (
 
 router = APIRouter(prefix="/api/incidents", tags=["Incidents"])
 
-@router.get("", summary="List incidents")
+@router.get("", summary="List incidents (Cache-Aside with Redis)")
 def list_incidents(
     status: Optional[str] = Query(None, description="Filter by status (OPEN, MITIGATED, RESOLVED)"),
     severity: Optional[str] = Query(None, description="Filter by severity (CRITICAL, WARNING)"),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db)
 ) -> List[Dict[str, Any]]:
-    return TelemetryRepository.get_incidents(db, status=status, severity=severity, limit=limit)
+    cache_key = f"incidents:list:{status}:{severity}:{limit}"
+    cached = cache_manager.get(cache_key)
+    if cached:
+        try:
+            return json.loads(cached)
+        except Exception:
+            pass
 
-@router.get("/{incident_id}", summary="Get incident details with correlation evidence")
+    incidents = TelemetryRepository.get_incidents(db, status=status, severity=severity, limit=limit)
+    cache_manager.set(cache_key, json.dumps(incidents), ex=60)
+    return incidents
+
+@router.get("/{incident_id}", summary="Get incident details with correlation evidence (Cache-Aside with Redis)")
 def get_incident(incident_id: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    cache_key = f"incidents:detail:{incident_id}"
+    cached = cache_manager.get(cache_key)
+    if cached:
+        try:
+            return json.loads(cached)
+        except Exception:
+            pass
+
     incident = TelemetryRepository.get_incident_by_id(db, incident_id=incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail=f"Incident '{incident_id}' not found")
@@ -34,10 +54,12 @@ def get_incident(incident_id: str, db: Session = Depends(get_db)) -> Dict[str, A
     all_alerts = TelemetryRepository.get_alerts(db, limit=1000)
     linked_alerts = [a for a in all_alerts if a["id"] in alert_ids]
 
-    return {
+    payload = {
         **incident,
         "alerts": linked_alerts
     }
+    cache_manager.set(cache_key, json.dumps(payload), ex=60)
+    return payload
 
 @router.post("/{incident_id}/root-cause", summary="Diagnose incident root cause (AI or deterministic fallback)", response_model=RootCauseAnalysis)
 def diagnose_root_cause(
@@ -80,11 +102,15 @@ def remediate_incident(
 ) -> RemediationResult:
     req = request or RemediationRequest()
     try:
-        return remediation_service.remediate_incident(
+        result = remediation_service.remediate_incident(
             db=db,
             incident_id=incident_id,
             request=req
         )
+        # Cache Invalidation: Purge cached incident queries upon state mutation
+        cache_manager.delete(f"incidents:detail:{incident_id}")
+        cache_manager.delete_pattern("incidents:list:*")
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Remediation processing failed: {str(e)}")
 

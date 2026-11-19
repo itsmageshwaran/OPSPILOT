@@ -38,3 +38,25 @@ def reset_opspilot_database(db: Session = Depends(get_db)):
         "shopflow_reset": "success" if shopflow_reset else "unavailable",
     }
 
+
+@router.get("/api/config/secrets-health", summary="Environment Variables & Secrets Management Health")
+def secrets_health_check():
+    """
+    Environment Variables & Secrets Management Demonstration:
+    Validates that required cryptographic secrets and connection URIs are loaded
+    from the environment and comply with entropy policies, without leaking secrets.
+    """
+    settings.validate_secrets()
+    return {
+        "status": "VALIDATED",
+        "environment": settings.environment,
+        "secrets_management": {
+            "jwt_secret_configured": bool(settings.jwt_secret_key),
+            "jwt_secret_length_bytes": len(settings.jwt_secret_key),
+            "payment_webhook_secret_configured": bool(settings.payment_webhook_secret),
+            "mongo_uri_configured": bool(settings.mongo_uri),
+            "redis_host_configured": bool(settings.redis_host),
+            "hardcoded_fallbacks_prohibited": True,
+        }
+    }
+

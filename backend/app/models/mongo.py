@@ -1,17 +1,26 @@
 """
 MongoDB ODM / Document Models for OpsPilot Incident Knowledge Base and Post-Mortems.
 Demonstrates:
-- CRUD Operations (Mongo)
-- Embedding vs Referencing Relationships
-- Aggregation Pipelines (MTTR, Root-Cause distribution, Service degradation trends)
-- Indexing for Query Performance (Compound indexes, text search)
+- CRUD Operations (Mongo): insert_one, insert_many, find_one, find, update_one, update_many, delete_one, delete_many
+- Embedding vs Referencing Relationships: EmbeddedAlert, EmbeddedTimelineStep vs referenced services/audits
+- Aggregation Pipelines: $match, $unwind, $group, $sort, $project (MTTR, Root-Cause distribution)
+- Indexing for Query Performance: Compound indexes, text search, unique indexes, multikey tag indexes
 """
 
 import os
 import uuid
+import logging
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
+
+try:
+    import pymongo
+    HAS_PYMONGO = True
+except ImportError:
+    HAS_PYMONGO = False
+
+logger = logging.getLogger("opspilot.mongo")
 
 
 def utc_now_iso() -> str:
@@ -19,7 +28,7 @@ def utc_now_iso() -> str:
 
 
 # ==============================================================================
-# EMBEDDED RELATIONSHIPS
+# EMBEDDED RELATIONSHIPS (NoSQL MongoDB Pattern)
 # ==============================================================================
 
 class EmbeddedAlert(BaseModel):
@@ -50,7 +59,7 @@ class EmbeddedTimelineStep(BaseModel):
 
 
 # ==============================================================================
-# REFERENCED RELATIONSHIPS
+# REFERENCED RELATIONSHIPS (NoSQL MongoDB Pattern)
 # ==============================================================================
 
 class PostMortemDocument(BaseModel):
@@ -108,18 +117,22 @@ class MongoIncidentKnowledgeBase:
 
     def _init_client(self):
         """Attempts real MongoDB connection using pymongo."""
+        if not HAS_PYMONGO:
+            self.is_real_connected = False
+            self.connection_blocker = "pymongo package is not installed."
+            return
         try:
-            import pymongo
-            client = pymongo.MongoClient(self.uri, serverSelectionTimeoutMS=1500)
-            # Ping database to verify live network connectivity
+            client = pymongo.MongoClient(self.uri, serverSelectionTimeoutMS=1200)
             client.admin.command("ping")
             self.real_client = client
             self.real_collection = client[self.db_name][self.collection_name]
             self.is_real_connected = True
             self.connection_blocker = None
+            logger.info(f"Connected to real MongoDB instance at {self.uri}")
         except Exception as e:
             self.is_real_connected = False
             self.connection_blocker = f"Real MongoDB server not reachable at {self.uri}: {str(e)}"
+            logger.info(f"MongoDB offline ({self.connection_blocker}); utilizing emulation mode.")
 
     def _init_indexes(self):
         """
@@ -127,23 +140,25 @@ class MongoIncidentKnowledgeBase:
         1. Compound index on (root_cause_service, status, created_at)
         2. Unique index on incident_id
         3. Multikey index on tags
-        4. Numeric index on mttr_minutes
+        4. Text index on (title, summary)
+        5. Numeric index on mttr_minutes
         """
         self._indexes = [
             {"keys": [("incident_id", 1)], "unique": True, "name": "idx_incident_id_unique"},
             {"keys": [("root_cause_service", 1), ("status", 1), ("created_at", -1)], "name": "idx_service_status_time"},
             {"keys": [("tags", 1)], "name": "idx_multikey_tags"},
+            {"keys": [("title", "text"), ("summary", "text")], "name": "idx_text_search"},
             {"keys": [("mttr_minutes", 1)], "name": "idx_mttr_numeric"}
         ]
         if self.is_real_connected and self.real_collection is not None:
             try:
-                import pymongo
                 self.real_collection.create_index([("incident_id", pymongo.ASCENDING)], unique=True, name="idx_incident_id_unique")
                 self.real_collection.create_index([("root_cause_service", pymongo.ASCENDING), ("status", pymongo.ASCENDING), ("created_at", pymongo.DESCENDING)], name="idx_service_status_time")
                 self.real_collection.create_index([("tags", pymongo.ASCENDING)], name="idx_multikey_tags")
+                self.real_collection.create_index([("title", pymongo.TEXT), ("summary", pymongo.TEXT)], name="idx_text_search")
                 self.real_collection.create_index([("mttr_minutes", pymongo.ASCENDING)], name="idx_mttr_numeric")
             except Exception as e:
-                pass
+                logger.warning(f"Failed to create real MongoDB indexes: {e}")
 
     def list_indexes(self) -> List[Dict[str, Any]]:
         """Return registered MongoDB index definitions."""
@@ -156,50 +171,88 @@ class MongoIncidentKnowledgeBase:
                 pass
         return self._indexes
 
-    # --- CRUD: CREATE ---
-    def create_post_mortem(self, doc: PostMortemDocument) -> Dict[str, Any]:
-        """Insert a post-mortem document into MongoDB."""
-        data = doc.model_dump(by_alias=True)
-        doc_id = data.get("incident_id") or f"doc_{len(self._memory_docs) + 1}"
+    def create_index(self, keys: List[tuple], **kwargs) -> str:
+        """Dynamically create an index on the MongoDB collection."""
+        idx_name = kwargs.get("name") or f"idx_{'_'.join(k[0] for k in keys)}"
+        entry = {"keys": keys, "name": idx_name, **kwargs}
+        self._indexes.append(entry)
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                return self.real_collection.create_index(keys, **kwargs)
+            except Exception:
+                pass
+        return idx_name
+
+    # ==========================================================================
+    # CRUD - CREATE: insert_one, insert_many
+    # ==========================================================================
+    def insert_one(self, doc_dict: Dict[str, Any]) -> str:
+        """MongoDB CRUD: Insert single document into collection."""
+        data = dict(doc_dict)
+        doc_id = str(data.get("incident_id") or data.get("_id") or f"doc_{uuid.uuid4().hex[:8]}")
         data["_id"] = doc_id
         data["created_at"] = data.get("created_at") or utc_now_iso()
         data["updated_at"] = utc_now_iso()
 
         if self.is_real_connected and self.real_collection is not None:
             try:
-                # MongoDB CRUD: Create via insert_one (or update_one if existing)
-                existing = self.real_collection.find_one({"incident_id": doc_id})
-                if existing:
-                    self.real_collection.update_one({"incident_id": doc_id}, {"$set": data})
-                else:
-                    self.real_collection.insert_one(data)
+                res = self.real_collection.insert_one(data)
+                return str(res.inserted_id)
             except Exception:
                 pass
 
         self._memory_docs[doc_id] = data
-        return data
+        return doc_id
 
-    # --- CRUD: READ ---
-    def get_post_mortem(self, incident_id: str) -> Optional[Dict[str, Any]]:
-        """Read a single document by incident_id index lookup."""
+    def insert_many(self, docs_list: List[Dict[str, Any]]) -> List[str]:
+        """MongoDB CRUD: Insert multiple documents into collection."""
         if self.is_real_connected and self.real_collection is not None:
             try:
-                found = self.real_collection.find_one({"incident_id": incident_id})
+                res = self.real_collection.insert_many(docs_list)
+                return [str(i) for i in res.inserted_ids]
+            except Exception:
+                pass
+
+        inserted_ids = []
+        for d in docs_list:
+            inserted_ids.append(self.insert_one(d))
+        return inserted_ids
+
+    def create_post_mortem(self, doc: PostMortemDocument) -> Dict[str, Any]:
+        """Insert a validated post-mortem document into MongoDB collection."""
+        data = doc.model_dump(by_alias=True)
+        doc_id = self.insert_one(data)
+        data["_id"] = doc_id
+        return data
+
+    # ==========================================================================
+    # CRUD - READ: find_one, find
+    # ==========================================================================
+    def find_one(self, filter_query: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """MongoDB CRUD: Find single document matching filter query."""
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                found = self.real_collection.find_one(filter_query)
                 if found:
                     found["_id"] = str(found["_id"])
                     return found
             except Exception:
                 pass
-        return self._memory_docs.get(incident_id)
 
-    def find_by_service(self, service: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Read documents matching indexed fields with projection."""
+        for doc in self._memory_docs.values():
+            if all(doc.get(k) == v for k, v in filter_query.items()):
+                return doc
+        return None
+
+    def find(self, filter_query: Optional[Dict[str, Any]] = None, sort_field: Optional[str] = None, ascending: bool = True) -> List[Dict[str, Any]]:
+        """MongoDB CRUD: Find multiple documents with query filter and sorting."""
+        filter_query = filter_query or {}
         if self.is_real_connected and self.real_collection is not None:
             try:
-                query = {"root_cause_service": service}
-                if status:
-                    query["status"] = status
-                cursor = self.real_collection.find(query).sort("created_at", -1)
+                direction = 1 if ascending else -1
+                cursor = self.real_collection.find(filter_query)
+                if sort_field:
+                    cursor = cursor.sort(sort_field, direction)
                 results = []
                 for doc in cursor:
                     doc["_id"] = str(doc["_id"])
@@ -208,113 +261,121 @@ class MongoIncidentKnowledgeBase:
             except Exception:
                 pass
 
-        results = []
-        for doc in self._memory_docs.values():
-            if doc.get("root_cause_service") == service:
-                if status is None or doc.get("status") == status:
-                    results.append(doc)
-        return sorted(results, key=lambda d: d.get("created_at", ""), reverse=True)
+        results = [
+            doc for doc in self._memory_docs.values()
+            if all(doc.get(k) == v for k, v in filter_query.items())
+        ]
+        if sort_field:
+            results.sort(key=lambda d: d.get(sort_field, ""), reverse=not ascending)
+        return results
 
-    # --- CRUD: UPDATE ---
-    def update_post_mortem(self, incident_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Update existing document with $set semantics and bump updated_at."""
-        if incident_id not in self._memory_docs and (not self.is_real_connected or not self.real_collection.find_one({"incident_id": incident_id})):
-            return None
+    def get_post_mortem(self, incident_id: str) -> Optional[Dict[str, Any]]:
+        """Read a single document by unique incident_id index lookup."""
+        return self.find_one({"incident_id": incident_id})
 
-        updates["updated_at"] = utc_now_iso()
+    def find_by_service(self, service: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Read documents matching indexed fields with projection."""
+        query: Dict[str, Any] = {"root_cause_service": service}
+        if status:
+            query["status"] = status
+        return self.find(filter_query=query, sort_field="created_at", ascending=False)
+
+    # ==========================================================================
+    # CRUD - UPDATE: update_one, update_many
+    # ==========================================================================
+    def update_one(self, filter_query: Dict[str, Any], update_doc: Dict[str, Any]) -> int:
+        """MongoDB CRUD: Update single document with $set."""
+        set_vals = update_doc.get("$set", update_doc)
+        set_vals["updated_at"] = utc_now_iso()
 
         if self.is_real_connected and self.real_collection is not None:
             try:
-                self.real_collection.update_one({"incident_id": incident_id}, {"$set": updates})
+                res = self.real_collection.update_one(filter_query, {"$set": set_vals})
+                return res.modified_count
             except Exception:
                 pass
 
-        doc = self._memory_docs.get(incident_id, {})
-        doc.update(updates)
-        self._memory_docs[incident_id] = doc
-        return doc
-
-    # --- CRUD: DELETE ---
-    def delete_post_mortem(self, incident_id: str) -> bool:
-        """Delete document from MongoDB collection."""
-        deleted = False
-        if self.is_real_connected and self.real_collection is not None:
-            try:
-                res = self.real_collection.delete_one({"incident_id": incident_id})
-                if res.deleted_count > 0:
-                    deleted = True
-            except Exception:
-                pass
-
-        if incident_id in self._memory_docs:
-            del self._memory_docs[incident_id]
-            deleted = True
-        return deleted
-
-    # --- CANONICAL MONGODB CRUD PRIMITIVES ---
-    def insert_one(self, doc: Dict[str, Any]) -> str:
-        """MongoDB CRUD: Insert single document into collection."""
-        doc_id = str(doc.get("incident_id") or doc.get("_id") or uuid.uuid4().hex[:12])
-        doc["_id"] = doc_id
-        if self.is_real_connected and self.real_collection is not None:
-            try:
-                res = self.real_collection.insert_one(doc)
-                return str(res.inserted_id)
-            except Exception:
-                pass
-        self._memory_docs[doc_id] = doc
-        return doc_id
-
-    def insert_many(self, docs: List[Dict[str, Any]]) -> List[str]:
-        """MongoDB CRUD: Bulk insert multiple documents."""
-        ids = []
-        for d in docs:
-            ids.append(self.insert_one(d))
-        return ids
-
-    def find_one(self, filter_query: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """MongoDB CRUD: Find single document matching query filter."""
-        if self.is_real_connected and self.real_collection is not None:
-            try:
-                return self.real_collection.find_one(filter_query)
-            except Exception:
-                pass
-        for doc in self._memory_docs.values():
-            if all(doc.get(k) == v for k, v in filter_query.items()):
-                return doc
-        return None
-
-    def update_one(self, filter_query: Dict[str, Any], update_ops: Dict[str, Any]) -> bool:
-        """MongoDB CRUD: Update single document using $set operators."""
-        if self.is_real_connected and self.real_collection is not None:
-            try:
-                res = self.real_collection.update_one(filter_query, update_ops)
-                return res.modified_count > 0
-            except Exception:
-                pass
         target = self.find_one(filter_query)
         if target:
-            set_fields = update_ops.get("$set", update_ops)
-            target.update(set_fields)
-            return True
-        return False
+            target.update(set_vals)
+            doc_id = target.get("_id") or target.get("incident_id")
+            if doc_id:
+                self._memory_docs[doc_id] = target
+            return 1
+        return 0
 
-    def delete_one(self, filter_query: Dict[str, Any]) -> bool:
+    def update_many(self, filter_query: Dict[str, Any], update_doc: Dict[str, Any]) -> int:
+        """MongoDB CRUD: Update multiple documents."""
+        set_vals = update_doc.get("$set", update_doc)
+        set_vals["updated_at"] = utc_now_iso()
+
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                res = self.real_collection.update_many(filter_query, {"$set": set_vals})
+                return res.modified_count
+            except Exception:
+                pass
+
+        matches = self.find(filter_query)
+        for m in matches:
+            m.update(set_vals)
+            doc_id = m.get("_id") or m.get("incident_id")
+            if doc_id:
+                self._memory_docs[doc_id] = m
+        return len(matches)
+
+    def update_post_mortem(self, incident_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update existing document with $set semantics."""
+        count = self.update_one({"incident_id": incident_id}, {"$set": updates})
+        return self.get_post_mortem(incident_id) if count > 0 else None
+
+    # ==========================================================================
+    # CRUD - DELETE: delete_one, delete_many
+    # ==========================================================================
+    def delete_one(self, filter_query: Dict[str, Any]) -> int:
         """MongoDB CRUD: Delete single document matching filter."""
         if self.is_real_connected and self.real_collection is not None:
             try:
                 res = self.real_collection.delete_one(filter_query)
-                return res.deleted_count > 0
+                return res.deleted_count
             except Exception:
                 pass
-        for k, doc in list(self._memory_docs.items()):
-            if all(doc.get(field) == val for field, val in filter_query.items()):
-                del self._memory_docs[k]
-                return True
-        return False
 
+        target = self.find_one(filter_query)
+        if target:
+            doc_id = target.get("_id") or target.get("incident_id")
+            if doc_id in self._memory_docs:
+                del self._memory_docs[doc_id]
+                return 1
+        return 0
+
+    def delete_many(self, filter_query: Dict[str, Any]) -> int:
+        """MongoDB CRUD: Delete multiple documents."""
+        if self.is_real_connected and self.real_collection is not None:
+            try:
+                res = self.real_collection.delete_many(filter_query)
+                return res.deleted_count
+            except Exception:
+                pass
+
+        targets = self.find(filter_query)
+        deleted = 0
+        for t in targets:
+            doc_id = t.get("_id") or t.get("incident_id")
+            if doc_id in self._memory_docs:
+                del self._memory_docs[doc_id]
+                deleted += 1
+        return deleted
+
+    def delete_post_mortem(self, incident_id: str) -> bool:
+        """Delete document by unique incident_id."""
+        return self.delete_one({"incident_id": incident_id}) > 0
+
+    # ==========================================================================
+    # AGGREGATION PIPELINES
+    # ==========================================================================
     def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """MongoDB Aggregation Pipeline runner ($match, $group, $sort, $unwind)."""
+        """Execute a general MongoDB Aggregation Pipeline ($match, $group, $sort, $unwind)."""
         if self.is_real_connected and self.real_collection is not None:
             try:
                 return list(self.real_collection.aggregate(pipeline))
@@ -322,7 +383,6 @@ class MongoIncidentKnowledgeBase:
                 pass
         return self.aggregate_mttr_by_service()
 
-    # --- AGGREGATION PIPELINES ---
     def aggregate_mttr_by_service(self) -> List[Dict[str, Any]]:
         """
         Executes a canonical MongoDB Aggregation Pipeline:
@@ -440,3 +500,44 @@ class MongoIncidentKnowledgeBase:
 
 # Global singleton instance
 mongo_kb = MongoIncidentKnowledgeBase()
+
+# Top-level standalone functions matching standard PyMongo collection CRUD signatures
+def insert_one(doc: Dict[str, Any]) -> str:
+    """CRUD Create: Insert single document into MongoDB collection."""
+    return mongo_kb.insert_one(doc)
+
+def insert_many(docs: List[Dict[str, Any]]) -> List[str]:
+    """CRUD Create: Insert multiple documents into MongoDB collection."""
+    return mongo_kb.insert_many(docs)
+
+def find_one(filter_query: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """CRUD Read: Find single document by query filter."""
+    return mongo_kb.find_one(filter_query)
+
+def find(filter_query: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """CRUD Read: Find documents by query filter."""
+    return mongo_kb.find(filter_query)
+
+def update_one(filter_query: Dict[str, Any], update_ops: Dict[str, Any]) -> int:
+    """CRUD Update: Update document with $set operations."""
+    return mongo_kb.update_one(filter_query, update_ops)
+
+def update_many(filter_query: Dict[str, Any], update_ops: Dict[str, Any]) -> int:
+    """CRUD Update: Update multiple documents."""
+    return mongo_kb.update_many(filter_query, update_ops)
+
+def delete_one(filter_query: Dict[str, Any]) -> int:
+    """CRUD Delete: Delete document matching filter."""
+    return mongo_kb.delete_one(filter_query)
+
+def delete_many(filter_query: Dict[str, Any]) -> int:
+    """CRUD Delete: Delete multiple documents matching filter."""
+    return mongo_kb.delete_many(filter_query)
+
+def aggregate(pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Aggregation Pipeline: Execute multi-stage pipeline ($match, $group, $sort, $unwind)."""
+    return mongo_kb.aggregate(pipeline)
+
+def create_index(keys: List[tuple], **kwargs) -> str:
+    """MongoDB Indexing: Create index on collection."""
+    return mongo_kb.create_index(keys, **kwargs)

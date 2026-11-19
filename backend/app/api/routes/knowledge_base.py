@@ -52,6 +52,64 @@ def create_post_mortem(req: PostMortemCreateRequest):
     return {"message": "Document created successfully in MongoDB collection", "document": created}
 
 
+# ------------------------------------------------------------------------------
+# Direct Canonical MongoDB CRUD Endpoints (insert_one, find_one, update_one, delete_one)
+# ------------------------------------------------------------------------------
+@router.post("/documents", status_code=status.HTTP_201_CREATED, summary="MongoDB CRUD: insert_one")
+def insert_mongo_document(payload: Dict[str, Any]):
+    """Inserts a single raw JSON document using MongoDB insert_one()."""
+    inserted_id = mongo_kb.insert_one(payload)
+    return {"status": "SUCCESS", "inserted_id": inserted_id}
+
+
+@router.get("/documents/{doc_id}", status_code=status.HTTP_200_OK, summary="MongoDB CRUD: find_one")
+def find_mongo_document(doc_id: str):
+    """Finds a single document using MongoDB find_one()."""
+    doc = mongo_kb.find_one({"_id": doc_id}) or mongo_kb.find_one({"incident_id": doc_id})
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"MongoDB document with id '{doc_id}' not found."
+        )
+    return doc
+
+
+@router.patch("/documents/{doc_id}", status_code=status.HTTP_200_OK, summary="MongoDB CRUD: update_one")
+def update_mongo_document(doc_id: str, updates: Dict[str, Any]):
+    """Updates a single document with $set semantics using MongoDB update_one()."""
+    modified = mongo_kb.update_one({"_id": doc_id}, {"$set": updates})
+    if modified == 0:
+        modified = mongo_kb.update_one({"incident_id": doc_id}, {"$set": updates})
+    if modified == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"MongoDB document with id '{doc_id}' not found for update."
+        )
+    return {"status": "SUCCESS", "modified_count": modified}
+
+
+@router.delete("/documents/{doc_id}", status_code=status.HTTP_200_OK, summary="MongoDB CRUD: delete_one")
+def delete_mongo_document(doc_id: str):
+    """Deletes a single document using MongoDB delete_one()."""
+    deleted = mongo_kb.delete_one({"_id": doc_id})
+    if deleted == 0:
+        deleted = mongo_kb.delete_one({"incident_id": doc_id})
+    if deleted == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"MongoDB document with id '{doc_id}' not found for deletion."
+        )
+    return {"status": "SUCCESS", "deleted_count": deleted}
+
+
+@router.post("/aggregate", status_code=status.HTTP_200_OK, summary="MongoDB Aggregation Pipeline execution")
+def execute_aggregation_pipeline(pipeline: List[Dict[str, Any]]):
+    """Executes arbitrary MongoDB aggregation pipeline stages ($match, $group, $sort, $unwind)."""
+    results = mongo_kb.aggregate(pipeline)
+    return {"status": "SUCCESS", "count": len(results), "results": results}
+
+
+
 @router.get("/post-mortems/{incident_id}")
 def get_post_mortem(incident_id: str):
     """CRUD - READ: Fetch document using unique indexed incident_id."""

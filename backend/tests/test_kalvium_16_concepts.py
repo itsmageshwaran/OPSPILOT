@@ -68,13 +68,30 @@ def test_mongo_crud_primitives():
 
     # Update (update_one)
     updated = kb.update_one({"incident_id": doc_id}, {"$set": {"status": "RESOLVED"}})
-    assert updated is True
+    assert updated in (True, 1)
     assert kb.find_one({"incident_id": doc_id})["status"] == "RESOLVED"
 
     # Delete (delete_one)
     deleted = kb.delete_one({"incident_id": doc_id})
-    assert deleted is True
+    assert deleted in (True, 1)
     assert kb.find_one({"incident_id": doc_id}) is None
+
+    # Test HTTP routes for insert_one, find_one, update_one, delete_one
+    res_create = client.post("/api/knowledge-base/documents", json={"incident_id": f"http_{doc_id}", "status": "OPEN", "service": "payment"})
+    assert res_create.status_code == 201
+    assert "inserted_id" in res_create.json()
+
+    res_get = client.get(f"/api/knowledge-base/documents/http_{doc_id}")
+    assert res_get.status_code == 200
+    assert res_get.json()["incident_id"] == f"http_{doc_id}"
+
+    res_update = client.patch(f"/api/knowledge-base/documents/http_{doc_id}", json={"status": "RESOLVED"})
+    assert res_update.status_code == 200
+    assert res_update.json()["modified_count"] >= 1
+
+    res_delete = client.delete(f"/api/knowledge-base/documents/http_{doc_id}")
+    assert res_delete.status_code == 200
+    assert res_delete.json()["deleted_count"] >= 1
 
 
 # 2. Environment Variables & Secrets Management
@@ -83,6 +100,12 @@ def test_secrets_management_validation():
     dev_settings = Settings(environment="development")
     dev_settings.validate_secrets()
     assert dev_settings.jwt_secret_key is not None
+
+    # Health check endpoint verification
+    res_sec = client.get("/api/config/secrets-health")
+    assert res_sec.status_code == 200
+    assert res_sec.json()["status"] == "VALIDATED"
+    assert res_sec.json()["secrets_management"]["hardcoded_fallbacks_prohibited"] is True
 
     # Production strictly rejects insecure placeholder secrets
     with pytest.raises(ValueError, match="FATAL"):

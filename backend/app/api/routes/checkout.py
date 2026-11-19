@@ -9,6 +9,12 @@ from typing import Optional, Dict, Any
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+try:
+    import stripe
+    HAS_STRIPE = True
+except ImportError:
+    HAS_STRIPE = False
+
 logger = logging.getLogger("opspilot.checkout")
 
 router = APIRouter(tags=["Payment Gateway & Checkout"])
@@ -16,7 +22,9 @@ router = APIRouter(tags=["Payment Gateway & Checkout"])
 # Environment Secrets Management
 PAYMENT_WEBHOOK_SECRET = os.getenv("PAYMENT_WEBHOOK_SECRET", "whsec_test_mock_webhook_secret_shopflow_2026_strict")
 PAYMENT_GATEWAY_API_KEY = os.getenv("PAYMENT_GATEWAY_API_KEY", "sk_test_shopflow_mock_gateway_api_key_2026")
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", PAYMENT_GATEWAY_API_KEY)
+if HAS_STRIPE and STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
 
 class PaymentIntentRequest(BaseModel):
     order_id: str = Field(..., description="Target order identifier")
